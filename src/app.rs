@@ -62,6 +62,30 @@ impl MouseMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortMode {
+    Alphabetical,
+    AlphabeticalDesc,
+    #[default]
+    DateModified,
+    DateModifiedOldest,
+    FileSize,
+    FileSizeSmallest,
+}
+
+impl SortMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            SortMode::Alphabetical => "Name (A-Z)",
+            SortMode::AlphabeticalDesc => "Name (Z-A)",
+            SortMode::DateModified => "Date (Newest)",
+            SortMode::DateModifiedOldest => "Date (Oldest)",
+            SortMode::FileSize => "Size (Largest)",
+            SortMode::FileSizeSmallest => "Size (Smallest)",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppSettings {
     pub dark_mode: bool,
@@ -69,6 +93,7 @@ pub struct AppSettings {
     pub scale_to_fit: bool,
     pub use_sharp_scaling: bool,
     pub checkerboard_bg: bool,
+    pub sort_mode: SortMode,
 }
 
 impl Default for AppSettings {
@@ -79,6 +104,7 @@ impl Default for AppSettings {
             scale_to_fit: true,
             use_sharp_scaling: false,
             checkerboard_bg: true,
+            sort_mode: SortMode::default(),
         }
     }
 }
@@ -553,6 +579,81 @@ impl PhotonApp {
         });
     }
 
+    pub(crate) fn sort_images(&mut self, mode: SortMode) {
+        if self.images.is_empty() {
+            return;
+        }
+
+        let current_path = self.images.get(self.current_index).cloned();
+
+        match mode {
+            SortMode::Alphabetical => {
+                self.images.sort_by(|a, b| {
+                    let a_name = a
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_lowercase();
+                    let b_name = b
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_lowercase();
+                    a_name.cmp(&b_name)
+                });
+            }
+            SortMode::AlphabeticalDesc => {
+                self.images.sort_by(|a, b| {
+                    let a_name = a
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_lowercase();
+                    let b_name = b
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_lowercase();
+                    b_name.cmp(&a_name)
+                });
+            }
+            SortMode::DateModified => {
+                self.images.sort_by(|a, b| {
+                    let a_meta = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+                    let b_meta = std::fs::metadata(b).and_then(|m| m.modified()).ok();
+                    b_meta.cmp(&a_meta)
+                });
+            }
+            SortMode::DateModifiedOldest => {
+                self.images.sort_by(|a, b| {
+                    let a_meta = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+                    let b_meta = std::fs::metadata(b).and_then(|m| m.modified()).ok();
+                    a_meta.cmp(&b_meta)
+                });
+            }
+            SortMode::FileSize => {
+                self.images.sort_by(|a, b| {
+                    let a_size = std::fs::metadata(a).map(|m| m.len()).unwrap_or(0);
+                    let b_size = std::fs::metadata(b).map(|m| m.len()).unwrap_or(0);
+                    b_size.cmp(&a_size)
+                });
+            }
+            SortMode::FileSizeSmallest => {
+                self.images.sort_by(|a, b| {
+                    let a_size = std::fs::metadata(a).map(|m| m.len()).unwrap_or(0);
+                    let b_size = std::fs::metadata(b).map(|m| m.len()).unwrap_or(0);
+                    a_size.cmp(&b_size)
+                });
+            }
+        }
+
+        if let Some(path) = current_path {
+            if let Some(idx) = self.images.iter().position(|p| p == &path) {
+                self.current_index = idx;
+            }
+        }
+    }
+
     pub(crate) fn check_dir_load_complete(&mut self) {
         if let Some(ref receiver) = self.dir_load_receiver {
             if let Ok(files) = receiver.try_recv() {
@@ -561,6 +662,8 @@ impl PhotonApp {
                 self.is_loading_dir = false;
 
                 if !self.images.is_empty() {
+                    self.sort_images(self.settings.sort_mode);
+
                     // Try to restore old target path or index
                     let mut found = false;
                     if let Some(target) = &self.target_path {

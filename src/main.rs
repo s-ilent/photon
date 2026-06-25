@@ -240,7 +240,37 @@ impl eframe::App for app::PhotonApp {
                 .resizable(true)
                 .min_width(200.0)
                 .show(ctx, |ui| {
-                    ui.heading("Images");
+                    ui.horizontal(|ui| {
+                        ui.label("Sort:");
+                        egui::ComboBox::from_id_source("sort_mode")
+                            .selected_text(self.settings.sort_mode.label())
+                            .show_ui(ui, |ui| {
+                                let mut changed = false;
+                                for mode in [
+                                    app::SortMode::Alphabetical,
+                                    app::SortMode::AlphabeticalDesc,
+                                    app::SortMode::DateModified,
+                                    app::SortMode::DateModifiedOldest,
+                                    app::SortMode::FileSize,
+                                    app::SortMode::FileSizeSmallest,
+                                ] {
+                                    if ui
+                                        .selectable_value(
+                                            &mut self.settings.sort_mode,
+                                            mode,
+                                            mode.label(),
+                                        )
+                                        .clicked()
+                                    {
+                                        changed = true;
+                                    }
+                                }
+                                if changed {
+                                    self.sort_images(self.settings.sort_mode);
+                                }
+                            });
+                    });
+
                     ui.separator();
 
                     let num_images = self.images.len();
