@@ -126,7 +126,14 @@ impl eframe::App for app::PhotonApp {
             egui::Window::new("Settings")
                 .open(&mut self.settings_open)
                 .show(ctx, |ui| {
-                    ui.checkbox(&mut self.settings.scale_to_fit, "Scale to fit on load");
+                    ui.checkbox(
+                        &mut self.settings.scale_to_fit,
+                        "Scale to fit when switching images",
+                    );
+                    ui.checkbox(
+                        &mut self.settings.keep_zoom,
+                        "Keep zoom level when switching images",
+                    );
                     ui.checkbox(
                         &mut self.settings.use_sharp_scaling,
                         "Use Sharp (Pixel) Scaling",

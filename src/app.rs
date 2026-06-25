@@ -93,6 +93,7 @@ pub struct AppSettings {
     pub scale_to_fit: bool,
     pub use_sharp_scaling: bool,
     pub checkerboard_bg: bool,
+    pub keep_zoom: bool,
     pub sort_mode: SortMode,
 }
 
@@ -104,6 +105,7 @@ impl Default for AppSettings {
             scale_to_fit: true,
             use_sharp_scaling: false,
             checkerboard_bg: true,
+            keep_zoom: false,
             sort_mode: SortMode::default(),
         }
     }
@@ -140,6 +142,7 @@ pub struct PhotonApp {
     pub(crate) dir_load_receiver: Option<Receiver<Vec<PathBuf>>>,
     pub(crate) is_loading_dir: bool,
     pub(crate) scroll_to_target: bool,
+    pub(crate) scroll_accumulator: f32,
     pub(crate) pasted_rgba: Option<Vec<u8>>,
 }
 
@@ -188,6 +191,7 @@ impl PhotonApp {
             dir_load_receiver: None,
             is_loading_dir: false,
             scroll_to_target: false,
+            scroll_accumulator: 0.0,
             pasted_rgba: None,
         }
     }
@@ -523,11 +527,17 @@ impl PhotonApp {
                         self.image_dimensions = Some((width, height));
                         self.is_loading = false;
 
-                        self.zoom = 1.0;
-                        self.pan = egui::Vec2::ZERO;
-                        self.selection = None;
-                        self.selection_image_rect = None;
-                        self.selection_start = None;
+                        if !self.settings.keep_zoom {
+                            self.zoom = 1.0;
+                            self.pan = egui::Vec2::ZERO;
+                            self.selection = None;
+                            self.selection_image_rect = None;
+                            self.selection_start = None;
+
+                            if self.settings.scale_to_fit {
+                                self.needs_fit = true;
+                            }
+                        }
 
                         if path.is_none() {
                             self.pasted_rgba = rgba;
@@ -940,36 +950,49 @@ impl PhotonApp {
         // Handle input based on mode
         let mouse_pos = response.interact_pointer_pos();
 
-        // Scroll wheel - zoom (smooth and sensitive)
+        // Scroll wheel - zoom or navigate
         let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll_delta != 0.0 && response.hovered() {
-            let old_zoom = self.zoom;
-            // Use smoother log-scale zoom
-            let zoom_delta = scroll_delta * 0.005;
-            let new_zoom = (self.zoom * (1.0 + zoom_delta)).clamp(0.1, 50.0);
+            if self.mode == MouseMode::Navigate {
+                self.scroll_accumulator += scroll_delta;
+                let threshold = 30.0;
+                if self.scroll_accumulator >= threshold {
+                    self.prev_image();
+                    self.scroll_accumulator = 0.0;
+                } else if self.scroll_accumulator <= -threshold {
+                    self.next_image();
+                    self.scroll_accumulator = 0.0;
+                }
+            } else {
+                let old_zoom = self.zoom;
+                // Use smoother log-scale zoom
+                let zoom_delta = scroll_delta * 0.005;
+                let new_zoom = (self.zoom * (1.0 + zoom_delta)).clamp(0.1, 50.0);
 
-            // Adjust pan so the image scales around the mouse cursor or center
-            let zoom_center = ui
-                .input(|i| i.pointer.hover_pos())
-                .filter(|&pos| response.rect.contains(pos))
-                .unwrap_or_else(|| image_screen_rect.center());
+                // Adjust pan so the image scales around the mouse cursor or center
+                let zoom_center = ui
+                    .input(|i| i.pointer.hover_pos())
+                    .filter(|&pos| response.rect.contains(pos))
+                    .unwrap_or_else(|| image_screen_rect.center());
 
-            // The math: To keep zoom_center fixed, we adjust pan:
-            // delta_pan = -(zoom_center - image_center) * (new_zoom / old_zoom - 1)
-            let center_dist = zoom_center - image_screen_rect.center();
-            self.pan -= center_dist * (new_zoom / old_zoom - 1.0);
-            self.zoom = new_zoom;
+                // The math: To keep zoom_center fixed, we adjust pan:
+                let center_dist = zoom_center - image_screen_rect.center();
+                self.pan -= center_dist * (new_zoom / old_zoom - 1.0);
+                self.zoom = new_zoom;
 
-            // Update selection in image-space when zooming
-            if let Some(sel) = self.selection {
-                let new_sel = egui::Rect::from_min_size(
-                    egui::pos2(
-                        (sel.min.x - response.rect.min.x - center_offset.x - self.pan.x) / scale_x,
-                        (sel.min.y - response.rect.min.y - center_offset.y - self.pan.y) / scale_y,
-                    ),
-                    egui::vec2(sel.width() / scale_x, sel.height() / scale_y),
-                );
-                self.selection_image_rect = Some(new_sel);
+                // Update selection in image-space when zooming
+                if let Some(sel) = self.selection {
+                    let new_sel = egui::Rect::from_min_size(
+                        egui::pos2(
+                            (sel.min.x - response.rect.min.x - center_offset.x - self.pan.x)
+                                / scale_x,
+                            (sel.min.y - response.rect.min.y - center_offset.y - self.pan.y)
+                                / scale_y,
+                        ),
+                        egui::vec2(sel.width() / scale_x, sel.height() / scale_y),
+                    );
+                    self.selection_image_rect = Some(new_sel);
+                }
             }
         }
 
