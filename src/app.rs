@@ -548,6 +548,10 @@ impl PhotonApp {
                         if self.settings.scale_to_fit {
                             self.needs_fit = true;
                         }
+                    } else if self.is_loading {
+                        // Display the progressive intermediate image, keeping is_loading active
+                        self.image_texture_id = Some(new_id);
+                        self.image_dimensions = Some((width, height));
                     }
 
                     ctx.request_repaint();
