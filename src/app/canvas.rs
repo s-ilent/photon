@@ -1,28 +1,84 @@
-use crate::app::{MouseMode, PhotonApp};
+use crate::app::{MouseMode, PhotonApp, StatusOverlay};
 use eframe::egui;
 
 impl PhotonApp {
-    pub(crate) fn ui_status_overlay(&self, ctx: &egui::Context, text: &str) {
+    pub(crate) fn ui_status_overlay(&self, ctx: &egui::Context, state: StatusOverlay) {
         egui::Area::new(egui::Id::new("status_overlay"))
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.add(egui::widgets::Spinner::new().size(32.0));
-                    ui.add_space(10.0);
-                    ui.label(egui::RichText::new(text).strong().size(18.0));
+                    match state {
+                        StatusOverlay::NoImages => {
+                            // Subdued grey text for empty state
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new("No images loaded.")
+                                        .strong()
+                                        .size(18.0)
+                                        .color(egui::Color32::from_rgb(139, 143, 163)),
+                                )
+                                .wrap_mode(egui::TextWrapMode::Extend),
+                            );
+                        }
+                        StatusOverlay::Loading(msg) => {
+                            // Spinner + bright Dracula purple/pink text
+                            ui.add(egui::widgets::Spinner::new().size(32.0));
+                            ui.add_space(10.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(msg)
+                                        .strong()
+                                        .size(18.0)
+                                        .color(egui::Color32::from_rgb(248, 248, 242)),
+                                )
+                                .wrap_mode(egui::TextWrapMode::Extend),
+                            );
+                        }
+                        StatusOverlay::Error(err) => {
+                            // Dracula Red Alert Cross + Error Text
+                            ui.label(egui::RichText::new("❌").size(32.0));
+                            ui.add_space(8.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("Error: {}", err))
+                                        .strong()
+                                        .size(18.0)
+                                        .color(egui::Color32::from_rgb(255, 85, 85)),
+                                )
+                                .wrap_mode(egui::TextWrapMode::Extend),
+                            );
+                        }
+                        StatusOverlay::UnsupportedFormat(filename) => {
+                            // Dracula Orange Alert Question Mark + Warning Text
+                            ui.label(egui::RichText::new("❓").size(32.0));
+                            ui.add_space(8.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!(
+                                        "Unsupported format: {}",
+                                        filename
+                                    ))
+                                    .strong()
+                                    .size(18.0)
+                                    .color(egui::Color32::from_rgb(255, 184, 108)),
+                                )
+                                .wrap_mode(egui::TextWrapMode::Extend),
+                            );
+                        }
+                    }
                 });
             });
     }
 
     pub(crate) fn draw_image_workspace(&mut self, ui: &mut egui::Ui) {
         let Some(tex_id) = self.image_texture_id else {
-            self.ui_status_overlay(ui.ctx(), "No images loaded.");
+            self.ui_status_overlay(ui.ctx(), StatusOverlay::NoImages);
             return;
         };
 
         let Some((img_w, img_h)) = self.image_dimensions else {
-            self.ui_status_overlay(ui.ctx(), "No images loaded.");
+            self.ui_status_overlay(ui.ctx(), StatusOverlay::NoImages);
             return;
         };
 
@@ -99,7 +155,7 @@ impl PhotonApp {
             } else {
                 "Loading...".to_string()
             };
-            self.ui_status_overlay(ui.ctx(), &text);
+            self.ui_status_overlay(ui.ctx(), StatusOverlay::Loading(text));
         }
 
         // Calculate scale factors for image <-> screen conversion

@@ -327,7 +327,10 @@ impl eframe::App for app::PhotonApp {
         // 3. Central Workspace
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.is_loading_dir {
-                self.ui_status_overlay(ctx, "Loading Directory...");
+                self.ui_status_overlay(
+                    ctx,
+                    app::StatusOverlay::Loading("Loading Directory...".to_string()),
+                );
             } else {
                 self.draw_image_workspace(ui);
             }

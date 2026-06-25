@@ -35,6 +35,14 @@ pub enum WorkerMessage {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusOverlay {
+    NoImages,
+    Loading(String),
+    Error(String),
+    UnsupportedFormat(String),
+}
+
 /// Mouse modes that change how input is interpreted
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MouseMode {
