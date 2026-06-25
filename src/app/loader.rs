@@ -201,6 +201,19 @@ impl PhotonApp {
             self.target_path = Some(path.clone());
             self.is_loading = false;
             self.is_pasted = false;
+
+            // Reset zoom on cached loads if keep_zoom is disabled
+            if !self.settings.keep_zoom {
+                self.zoom = 1.0;
+                self.pan = egui::Vec2::ZERO;
+                self.selection = None;
+                self.selection_image_rect = None;
+                self.selection_start = None;
+
+                if self.settings.scale_to_fit {
+                    self.needs_fit = true;
+                }
+            }
         } else {
             self.target_path = Some(path.clone());
             self.is_loading = true;
