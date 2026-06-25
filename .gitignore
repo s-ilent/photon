@@ -1,0 +1,19 @@
+# Build output
+/target/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# AI garbage
+.claude/
+.remember/
+examples~/
+gemini/
+iced.md
+Plan.md
+.env

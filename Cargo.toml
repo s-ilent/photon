@@ -1,0 +1,36 @@
+[package]
+name = "photon"
+version = "0.1.0"
+edition = "2021"
+authors = ["Silent <silent@noemail.xyz>"]
+description = "Fast image viewer/browser written in Rust."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/s-ilent/photon"
+readme = "README.md"
+
+[dependencies]
+eframe = "0.34"
+egui = "0.34"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "dds", "exr", "webp"] }
+tokio = { version = "1", features = ["rt-multi-thread", "fs"] }
+rfd = "0.15"
+walkdir = "2"
+thiserror = "1"
+chrono = "0.4"
+arboard = { version = "3", features = ["wayland-data-control"] }
+wgpu = "29"
+egui-wgpu = "0.34"
+parking_lot = "0.12"
+bytemuck = { version = "1", features = ["derive"] }
+lru = "0.17.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
