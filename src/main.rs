@@ -171,43 +171,46 @@ impl eframe::App for app::PhotonApp {
 
         // 1. Top Toolbar (App State & Settings)
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("📁 Open").clicked() {
-                    self.open_file();
+            // Far-right elements are laid out first (right-to-left)
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("⚙").clicked() {
+                    self.settings_open = !self.settings_open;
                 }
                 ui.separator();
-                if ui.button("📋 Copy").clicked() {
-                    self.copy_to_clipboard();
+                if ui.button(format!("Mode: {}", self.mode.name())).clicked() {
+                    self.cycle_mode();
                 }
-                if ui.button("📥 Paste").clicked() {
-                    self.paste_from_clipboard(ctx);
-                }
-                ui.separator();
-                let sidebar_btn = if self.sidebar_open {
-                    "◀ Sidebar"
-                } else {
-                    "▶ Sidebar"
-                };
-                if ui.button(sidebar_btn).clicked() {
-                    self.sidebar_open = !self.sidebar_open;
-                    if self.sidebar_open {
-                        self.scroll_to_target = true;
-                    }
-                }
-                ui.separator();
-                if ui.button("Prev").clicked() {
-                    self.prev_image();
-                }
-                if ui.button("Next").clicked() {
-                    self.next_image();
-                }
-                ui.separator();
-                ui.label(format!("Mode: {}", self.mode.name()));
-                ui.separator();
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("⚙").clicked() {
-                        self.settings_open = !self.settings_open;
+                // Left-aligned elements fill the remaining space on the left (left-to-right)
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if ui.button("📁 Open").clicked() {
+                        self.open_file();
+                    }
+                    ui.separator();
+                    if ui.button("📋 Copy").clicked() {
+                        self.copy_to_clipboard();
+                    }
+                    if ui.button("📥 Paste").clicked() {
+                        self.paste_from_clipboard(ctx);
+                    }
+                    ui.separator();
+                    let sidebar_btn = if self.sidebar_open {
+                        "◀ Sidebar"
+                    } else {
+                        "▶ Sidebar"
+                    };
+                    if ui.button(sidebar_btn).clicked() {
+                        self.sidebar_open = !self.sidebar_open;
+                        if self.sidebar_open {
+                            self.scroll_to_target = true;
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Prev").clicked() {
+                        self.prev_image();
+                    }
+                    if ui.button("Next").clicked() {
+                        self.next_image();
                     }
                 });
             });
