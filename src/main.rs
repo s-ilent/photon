@@ -371,6 +371,7 @@ fn main() -> eframe::Result<()> {
             app.init_worker();
 
             if let Some(ref p) = path {
+                app.target_path = Some(p.clone());
                 app.load_directory(p);
             }
             Ok(Box::new(app))
