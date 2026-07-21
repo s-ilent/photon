@@ -102,7 +102,8 @@ impl eframe::App for app::PhotonApp {
             self.open_file();
         }
         if do_save {
-            println!("DEBUG: Save triggered (Not implemented)");
+            println!("DEBUG: Save triggered");
+            self.save_image_as();
         }
         if do_copy {
             println!("DEBUG: Stateful Copy Triggered");
@@ -193,6 +194,19 @@ impl eframe::App for app::PhotonApp {
                     }
                     if ui.button("📥 Paste").clicked() {
                         self.paste_from_clipboard(ctx);
+                    }
+                    if ui.button("💾 Save").clicked() {
+                        self.save_image_as();
+                    }
+                    if ui
+                        .add_enabled(
+                            self.mode == app::MouseMode::Select
+                                && self.selection_image_rect.is_some(),
+                            egui::Button::new("✂ Save Selection As\u{2026}"),
+                        )
+                        .clicked()
+                    {
+                        self.save_selection_as();
                     }
                     ui.separator();
                     let sidebar_btn = if self.sidebar_open {

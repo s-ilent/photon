@@ -1,4 +1,6 @@
-use crate::app::{LoadRequest, PhotonApp, Priority, SortMode, WorkerMessage};
+use crate::app::{
+    LoadRequest, LoadResult, PhotonApp, Priority, SortMode, StatusOverlay, WorkerMessage,
+};
 use crate::dir_walker;
 use eframe::egui;
 use std::collections::VecDeque;
@@ -93,11 +95,23 @@ impl PhotonApp {
 
                 let (rgba_for_texture, width, height, path_for_tx, rgba_for_res) =
                     match msg_to_process {
-                        Some(WorkerMessage::Load(req)) => {
+                        Some(WorkerMessage::Load(ref req)) => {
                             match crate::image_loader::load_image(&req.path) {
-                                Ok((data, w, h, _)) => (data, w, h, Some(req.path), None),
+                                Ok((data, w, h, _)) => (data, w, h, Some(req.path.clone()), None),
                                 Err(e) => {
+                                    // Surface the error to the main thread instead of swallowing it.
+                                    // Classify by the prefix of the string error from image_loader:
+                                    //   "Failed to decode image" → UnsupportedFormat
+                                    //   anything else (open/guess) → Error
+                                    // The fallback is Error so an unknown prefix yields the more
+                                    // general overlay — never a misleadingly specific one.
+                                    let is_format_error = e.starts_with("Failed to decode");
                                     println!("Failed to load image {:?}: {}", req.path, e);
+                                    let _ = res_tx.send(LoadResult::Failed {
+                                        path: Some(req.path.clone()),
+                                        is_format_error,
+                                        message: e,
+                                    });
                                     continue;
                                 }
                             }
@@ -106,7 +120,7 @@ impl PhotonApp {
                             rgba,
                             width,
                             height,
-                        }) => (rgba.clone(), width, height, None, Some(rgba)),
+                        }) => (rgba.clone(), width, height, None, Some(rgba.clone())),
                         None => continue,
                     };
 
@@ -163,7 +177,13 @@ impl PhotonApp {
                 }
 
                 // This will block if res_rx is full (sync_channel(5))
-                let _ = res_tx.send((path_for_tx, view, width, height, rgba_for_res));
+                let _ = res_tx.send(LoadResult::Loaded {
+                    path: path_for_tx,
+                    view,
+                    width,
+                    height,
+                    rgba: rgba_for_res,
+                });
             }
         });
     }
@@ -191,6 +211,8 @@ impl PhotonApp {
         if self.images.is_empty() {
             return;
         }
+
+        self.error_overlay = None;
 
         let path = self.images[self.current_index].clone();
 
@@ -245,99 +267,144 @@ impl PhotonApp {
 
     pub(crate) fn check_load_complete(&mut self, ctx: &egui::Context) {
         if let Some(ref mut receiver) = self.load_receiver {
-            while let Ok((path, texture_view, width, height, rgba)) = receiver.try_recv() {
-                if let Some(ref render_state) = self.render_state {
-                    let device = &render_state.device;
-                    let mut renderer = render_state.renderer.write();
+            while let Ok(result) = receiver.try_recv() {
+                match result {
+                    LoadResult::Loaded {
+                        path,
+                        view: texture_view,
+                        width,
+                        height,
+                        rgba,
+                    } => {
+                        if let Some(ref render_state) = self.render_state {
+                            let device = &render_state.device;
+                            let mut renderer = render_state.renderer.write();
 
-                    let effective_path =
-                        path.clone().unwrap_or_else(|| PathBuf::from("__pasted__"));
+                            let effective_path =
+                                path.clone().unwrap_or_else(|| PathBuf::from("__pasted__"));
 
-                    // 1. Check if we already have this in cache from another load
-                    if let Some((old_id, _, _)) = self.texture_cache.get(&effective_path) {
-                        if Some(*old_id) != self.image_texture_id {
-                            let oid = *old_id;
-                            renderer.free_texture(&oid);
-                        }
-                    }
-
-                    // 2. Register the new texture
-                    let new_id =
-                        renderer.register_native_texture(device, &texture_view, FilterMode::Linear);
-
-                    // 3. Put in cache and handle eviction correctly
-                    if self.texture_cache.len() == self.texture_cache.cap().into() {
-                        // Manually pop to avoid leaking the GPU resource
-                        if let Some((_, (evict_id, _, _))) = self.texture_cache.pop_lru() {
-                            // Only free if it's not the one currently on screen
-                            if Some(evict_id) != self.image_texture_id {
-                                renderer.free_texture(&evict_id);
-                            }
-                        }
-                    }
-                    self.texture_cache
-                        .put(effective_path.clone(), (new_id, width, height));
-
-                    // 4. Update display if this was the active target
-                    let is_active = if let Some(ref p) = path {
-                        self.target_path.as_ref() == Some(p)
-                    } else {
-                        self.is_pasted
-                    };
-
-                    if is_active {
-                        // 5. Cleanup the OLD displayed texture if it's no longer in cache
-                        if let Some(old_id) = self.image_texture_id {
-                            let mut in_cache = false;
-                            for (_, (id, _, _)) in self.texture_cache.iter() {
-                                if *id == old_id {
-                                    in_cache = true;
-                                    break;
+                            // 1. Check if we already have this in cache from another load
+                            if let Some((old_id, _, _)) = self.texture_cache.get(&effective_path) {
+                                if Some(*old_id) != self.image_texture_id {
+                                    let oid = *old_id;
+                                    renderer.free_texture(&oid);
                                 }
                             }
-                            if !in_cache {
-                                renderer.free_texture(&old_id);
+
+                            // 2. Register the new texture
+                            let new_id = renderer
+                                .register_native_texture(device, &texture_view, FilterMode::Linear);
+
+                            // 3. Put in cache and handle eviction correctly
+                            if self.texture_cache.len() == self.texture_cache.cap().into() {
+                                // Manually pop to avoid leaking the GPU resource
+                                if let Some((_, (evict_id, _, _))) = self.texture_cache.pop_lru() {
+                                    // Only free if it's not the one currently on screen
+                                    if Some(evict_id) != self.image_texture_id {
+                                        renderer.free_texture(&evict_id);
+                                    }
+                                }
                             }
-                        }
+                            self.texture_cache
+                                .put(effective_path.clone(), (new_id, width, height));
 
-                        self.image_texture_id = Some(new_id);
-                        self.image_dimensions = Some((width, height));
-                        self.is_loading = false;
+                            // 4. Update display if this was the active target
+                            let is_active = if let Some(ref p) = path {
+                                self.target_path.as_ref() == Some(p)
+                            } else {
+                                self.is_pasted
+                            };
 
-                        if !self.settings.keep_zoom {
-                            self.zoom = 1.0;
-                            self.pan = egui::Vec2::ZERO;
-                            self.selection = None;
-                            self.selection_image_rect = None;
-                            self.selection_start = None;
+                            if is_active {
+                                // 5. Cleanup the OLD displayed texture if it's no longer in cache
+                                if let Some(old_id) = self.image_texture_id {
+                                    let mut in_cache = false;
+                                    for (_, (id, _, _)) in self.texture_cache.iter() {
+                                        if *id == old_id {
+                                            in_cache = true;
+                                            break;
+                                        }
+                                    }
+                                    if !in_cache {
+                                        renderer.free_texture(&old_id);
+                                    }
+                                }
 
-                            if self.settings.scale_to_fit {
-                                self.needs_fit = true;
+                                self.image_texture_id = Some(new_id);
+                                self.image_dimensions = Some((width, height));
+                                self.is_loading = false;
+                                self.error_overlay = None;
+
+                                if !self.settings.keep_zoom {
+                                    self.zoom = 1.0;
+                                    self.pan = egui::Vec2::ZERO;
+                                    self.selection = None;
+                                    self.selection_image_rect = None;
+                                    self.selection_start = None;
+
+                                    if self.settings.scale_to_fit {
+                                        self.needs_fit = true;
+                                    }
+                                }
+
+                                if path.is_none() {
+                                    self.pasted_rgba = rgba;
+                                } else {
+                                    self.pasted_rgba = None;
+                                }
+
+                                if self.settings.scale_to_fit {
+                                    self.needs_fit = true;
+                                }
+                            } else if self.is_loading {
+                                // Display the progressive intermediate image, keeping is_loading active
+                                self.image_texture_id = Some(new_id);
+                                self.image_dimensions = Some((width, height));
                             }
-                        }
 
-                        if path.is_none() {
-                            self.pasted_rgba = rgba;
-                        } else {
-                            self.pasted_rgba = None;
+                            ctx.request_repaint();
                         }
-
-                        if self.settings.scale_to_fit {
-                            self.needs_fit = true;
-                        }
-                    } else if self.is_loading {
-                        // Display the progressive intermediate image, keeping is_loading active
-                        self.image_texture_id = Some(new_id);
-                        self.image_dimensions = Some((width, height));
                     }
+                    LoadResult::Failed {
+                        path,
+                        is_format_error,
+                        message,
+                    } => {
+                        // Only react if the failure is for the currently displayed target,
+                        // not a stale preload for a previously-current image.
+                        let is_active = if let Some(ref p) = &path {
+                            self.target_path.as_ref() == Some(p)
+                        } else {
+                            self.is_pasted
+                        };
 
-                    ctx.request_repaint();
+                        if is_active {
+                            self.is_loading = false;
+                            let filename = path
+                                .as_ref()
+                                .and_then(|p| p.file_name())
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            self.error_overlay = Some(if is_format_error {
+                                StatusOverlay::UnsupportedFormat(filename)
+                            } else {
+                                StatusOverlay::Error(message)
+                            });
+                            ctx.request_repaint();
+                        } else {
+                            // Stale preload failure — leave the active image alone.
+                            println!("Stale preload failed for {:?}: {}", path, message);
+                        }
+                    }
                 }
             }
         }
     }
 
     pub(crate) fn load_directory(&mut self, path: &Path) {
+        // Clear any stale error from the previous folder before starting anew.
+        self.error_overlay = None;
+
         // Clear all old textures to prevent leaks
         if let Some(ref render_state) = self.render_state {
             let mut renderer = render_state.renderer.write();
@@ -378,6 +445,7 @@ impl PhotonApp {
                 self.is_loading_dir = false;
 
                 if !self.images.is_empty() {
+                    self.error_overlay = None;
                     self.sort_images(self.settings.sort_mode);
 
                     // Try to restore old target path or index

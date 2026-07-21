@@ -83,6 +83,14 @@ impl PhotonApp {
     }
 
     pub(crate) fn draw_image_workspace(&mut self, ui: &mut egui::Ui) {
+        // A loader error for the active target takes precedence over the
+        // loading/empty overlays: show it and stop (a failed load can't be
+        // viewed). The overlay is cleared on navigation / paste / dir load.
+        if let Some(overlay) = self.error_overlay.clone() {
+            self.ui_status_overlay(ui.ctx(), overlay);
+            return;
+        }
+
         let Some(tex_id) = self.image_texture_id else {
             if self.is_loading {
                 self.ui_status_overlay(

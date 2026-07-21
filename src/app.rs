@@ -12,6 +12,7 @@ use wgpu::Device;
 mod canvas;
 mod clipboard;
 mod loader;
+mod saver;
 mod theme;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -32,6 +33,24 @@ pub enum WorkerMessage {
         rgba: Vec<u8>,
         width: u32,
         height: u32,
+    },
+}
+
+/// Result sent from the loader worker thread back to the main thread.
+pub enum LoadResult {
+    Loaded {
+        path: Option<PathBuf>,
+        view: wgpu::TextureView,
+        width: u32,
+        height: u32,
+        /// Only set for `Paste`; always `None` for `Load`.
+        rgba: Option<Vec<u8>>,
+    },
+    Failed {
+        path: Option<PathBuf>,
+        /// `true` → `StatusOverlay::UnsupportedFormat`, `false` → `StatusOverlay::Error`.
+        is_format_error: bool,
+        message: String,
     },
 }
 
@@ -123,15 +142,7 @@ pub struct PhotonApp {
     pub(crate) images: Vec<PathBuf>,
     pub(crate) current_index: usize,
     pub(crate) texture_cache: LruCache<PathBuf, (egui::TextureId, u32, u32)>,
-    pub(crate) load_receiver: Option<
-        Receiver<(
-            Option<PathBuf>,
-            wgpu::TextureView,
-            u32,
-            u32,
-            Option<Vec<u8>>,
-        )>,
-    >,
+    pub(crate) load_receiver: Option<Receiver<LoadResult>>,
     pub(crate) request_sender: Option<Sender<WorkerMessage>>,
     pub(crate) latest_req_id: Arc<AtomicU64>,
     pub(crate) sidebar_open: bool,
@@ -159,6 +170,11 @@ pub struct PhotonApp {
     pub(crate) scroll_to_target: bool,
     pub(crate) scroll_accumulator: f32,
     pub(crate) pasted_rgba: Option<Vec<u8>>,
+    /// Active error overlay for the currently targeted image. `None` when
+    /// the current target is fine (loading, loaded, or no target). Set by
+    /// `check_load_complete` when a `LoadResult::Failed` for the active
+    /// target arrives; cleared by navigation / paste / dir load.
+    pub(crate) error_overlay: Option<StatusOverlay>,
 }
 
 impl PhotonApp {
@@ -195,6 +211,7 @@ impl PhotonApp {
             scroll_to_target: false,
             scroll_accumulator: 0.0,
             pasted_rgba: None,
+            error_overlay: None,
         }
     }
 
@@ -209,6 +226,7 @@ impl PhotonApp {
         if self.images.is_empty() {
             return;
         }
+        self.error_overlay = None;
         if self.is_pasted {
             self.is_pasted = false;
         }
@@ -220,6 +238,7 @@ impl PhotonApp {
         if self.images.is_empty() {
             return;
         }
+        self.error_overlay = None;
         if self.is_pasted {
             self.is_pasted = false;
             self.request_current(); // Return to the pre-paste image
