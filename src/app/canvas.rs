@@ -71,14 +71,39 @@ impl PhotonApp {
             });
     }
 
+    fn loading_text(&self) -> String {
+        if let Some(p) = &self.target_path {
+            format!(
+                "Loading {}...",
+                p.file_name().unwrap_or_default().to_string_lossy()
+            )
+        } else {
+            "Loading...".to_string()
+        }
+    }
+
     pub(crate) fn draw_image_workspace(&mut self, ui: &mut egui::Ui) {
         let Some(tex_id) = self.image_texture_id else {
-            self.ui_status_overlay(ui.ctx(), StatusOverlay::NoImages);
+            if self.is_loading {
+                self.ui_status_overlay(
+                    ui.ctx(),
+                    StatusOverlay::Loading(self.loading_text()),
+                );
+            } else {
+                self.ui_status_overlay(ui.ctx(), StatusOverlay::NoImages);
+            }
             return;
         };
 
         let Some((img_w, img_h)) = self.image_dimensions else {
-            self.ui_status_overlay(ui.ctx(), StatusOverlay::NoImages);
+            if self.is_loading {
+                self.ui_status_overlay(
+                    ui.ctx(),
+                    StatusOverlay::Loading(self.loading_text()),
+                );
+            } else {
+                self.ui_status_overlay(ui.ctx(), StatusOverlay::NoImages);
+            }
             return;
         };
 
@@ -147,15 +172,10 @@ impl PhotonApp {
         );
 
         if self.is_loading {
-            let text = if let Some(p) = &self.target_path {
-                format!(
-                    "Loading {}...",
-                    p.file_name().unwrap_or_default().to_string_lossy()
-                )
-            } else {
-                "Loading...".to_string()
-            };
-            self.ui_status_overlay(ui.ctx(), StatusOverlay::Loading(text));
+            self.ui_status_overlay(
+                ui.ctx(),
+                StatusOverlay::Loading(self.loading_text()),
+            );
         }
 
         // Calculate scale factors for image <-> screen conversion
