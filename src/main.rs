@@ -3,6 +3,7 @@ mod dir_walker;
 mod image_loader;
 use crate::app::PhotonApp;
 use eframe::egui;
+use eframe::egui_wgpu::WgpuConfiguration;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -356,6 +357,10 @@ fn main() -> eframe::Result<()> {
                 .with_inner_size([1024.0, 768.0])
                 .with_resizable(true)
                 .with_decorations(true),
+            wgpu_options: WgpuConfiguration {
+                present_mode: wgpu::PresentMode::Mailbox,
+                ..Default::default()
+            },
             ..Default::default()
         },
         Box::new(move |cc| {
