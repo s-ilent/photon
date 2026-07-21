@@ -23,6 +23,7 @@ egui-wgpu = "0.34"
 parking_lot = "0.12"
 bytemuck = { version = "1", features = ["derive"] }
 lru = "0.17.0"
+image_dds = { version = "0.7", default-features = false, features = ["ddsfile", "image"] }
 
 [dev-dependencies]
 tempfile = "3"

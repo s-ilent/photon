@@ -3,8 +3,21 @@ use std::path::Path;
 /// Detailed timing for image loading stages
 pub struct LoadStats {}
 
-/// Load an image and return as RGBA pixels with dimensions, plus timing stats
+/// Load an image and return as RGBA pixels with dimensions, plus timing stats.
+///
+/// `.dds` files are routed through `image_dds` (which wraps `ddsfile` for header
+/// parsing and decodes BC1–BC7 + uncompressed variants). All other supported
+/// formats go through the `image` crate as before.
 pub fn load_image(path: &Path) -> Result<(Vec<u8>, u32, u32, LoadStats), String> {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+
+    if extension.as_deref() == Some("dds") {
+        return load_dds(path);
+    }
+
     let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
     let reader = std::io::BufReader::new(file);
 
@@ -20,4 +33,51 @@ pub fn load_image(path: &Path) -> Result<(Vec<u8>, u32, u32, LoadStats), String>
     let rgba = img.to_rgba8();
 
     Ok((rgba.into_raw(), w, h, LoadStats {}))
+}
+
+/// Decode a `.dds` file via `image_dds`. Covers DXT1–DXT5, BC4, BC5 (ATI2/BC5U),
+/// BC7, and uncompressed variants — a strict superset of `image`'s built-in
+/// DDS decoder, which rejects everything past DXT5 / the legacy FourCC set.
+fn load_dds(path: &Path) -> Result<(Vec<u8>, u32, u32, LoadStats), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let dds = image_dds::ddsfile::Dds::read(file)
+        .map_err(|e| format!("Failed to decode image: Failed to read DDS header: {}", e))?;
+    let img = image_dds::image_from_dds(&dds, 0)
+        .map_err(|e| format!("Failed to decode image: DDS decode failed: {}", e))?;
+    let (w, h) = (img.width(), img.height());
+    Ok((img.into_raw(), w, h, LoadStats {}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a small uncompressed RGBA8 DDS in memory, write it to a tempdir,
+    /// and verify `load_image` round-trips it back to the same pixels.
+    #[test]
+    fn test_load_dds_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("rgba8.dds");
+
+        let (w, h) = (4u32, 2u32);
+        let pixels: Vec<u8> = (0..(w * h * 4)).map(|i| i as u8).collect();
+
+        let mut dds = image_dds::ddsfile::Dds::new_d3d(image_dds::ddsfile::NewD3dParams {
+            height: h,
+            width: w,
+            depth: None,
+            format: image_dds::ddsfile::D3DFormat::A8B8G8R8,
+            mipmap_levels: Some(1),
+            caps2: None,
+        })
+        .expect("build dds");
+        dds.data = pixels.clone();
+        let mut f = std::fs::File::create(&path).expect("create file");
+        dds.write(&mut f).expect("write dds");
+
+        let (rgba, decoded_w, decoded_h, _) = load_image(&path).expect("load_image ok");
+        assert_eq!((decoded_w, decoded_h), (w, h));
+        assert_eq!(rgba, pixels);
+        assert!(!rgba.is_empty());
+    }
 }
