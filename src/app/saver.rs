@@ -3,11 +3,19 @@ use crate::app::PhotonApp;
 use image::ExtendedColorType;
 use std::path::PathBuf;
 
-/// Save buffers are always written as RGBA8; the `image` crate infers the
-/// on-disk format from the file extension the user picks in the save dialog.
-/// These are the only extensions offered; anything the `image` crate can't
-/// reliably encode from RGBA8 (gif, dds, exr) is intentionally absent.
-const SAVE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "tif"];
+/// One entry in the save-as dialog's format dropdown. The first entry is the
+/// default selection. The `image` crate infers the on-disk format from the
+/// file extension the OS appends based on the chosen filter.
+///
+/// Anything the `image` crate can't reliably encode from RGBA8 (gif, dds, exr)
+/// is intentionally absent.
+const SAVE_FILTERS: &[(&str, &[&str])] = &[
+    ("PNG", &["png"]),
+    ("JPEG", &["jpg", "jpeg"]),
+    ("WebP", &["webp"]),
+    ("BMP", &["bmp"]),
+    ("TIFF", &["tiff", "tif"]),
+];
 
 impl PhotonApp {
     /// Save the full currently displayed image as a new file.
@@ -59,6 +67,17 @@ impl PhotonApp {
             .unwrap_or_else(|| "image".to_string())
     }
 
+    /// The directory the save dialog opens in. Defaults to the displayed
+    /// image's parent directory; falls back to the OS default for pasted
+    /// images (which have no on-disk location).
+    fn suggested_save_dir(&self) -> Option<PathBuf> {
+        self.images
+            .get(self.current_index)
+            .and_then(|p| p.parent())
+            .filter(|d| !d.as_os_str().is_empty())
+            .map(std::path::Path::to_path_buf)
+    }
+
     fn save_dialog_and_encode(
         &self,
         rgba: Vec<u8>,
@@ -66,18 +85,25 @@ impl PhotonApp {
         height: u32,
         suggested: String,
     ) {
-        let path = rfd::FileDialog::new()
-            .add_filter("Images", SAVE_EXTENSIONS)
-            .set_file_name(suggested)
-            .save_file();
+        let mut dialog = rfd::FileDialog::new().set_file_name(suggested);
 
-        let Some(path) = path else {
+        // One dropdown entry per format so the user can pick by type.
+        for (name, exts) in SAVE_FILTERS {
+            dialog = dialog.add_filter(*name, *exts);
+        }
+
+        if let Some(dir) = self.suggested_save_dir() {
+            dialog = dialog.set_directory(dir);
+        }
+
+        let Some(path) = dialog.save_file() else {
             return;
         };
 
         // Encoding/IO runs in a background thread so it doesn't freeze the
-        // render loop. On failure we follow the existing convention: print to
-        // stdout. A "surface save errors in the UI" cleanup is tracked in Todo.
+        // render loop. `image::save_buffer` infers the format from the file
+        // extension the user typed (or the OS appended from the chosen filter).
+        // On failure we follow the existing convention: print to stdout.
         std::thread::spawn(move || {
             if let Err(e) = encode_to_path(&path, &rgba, width, height) {
                 println!("Failed to save image to {:?}: {}", path, e);
