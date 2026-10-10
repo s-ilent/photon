@@ -35,6 +35,10 @@ impl PhotonApp {
     pub(crate) fn load_custom_font(ctx: &egui::Context) {
         let mut fonts = egui::FontDefinitions::default();
 
+        // Phosphor lands at family slot 1 (icon glyphs); the custom font
+        // takes slot 0 below, UI text fonts after that.
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+
         fonts.font_data.insert(
             "custom_font".to_owned(),
             std::sync::Arc::new(egui::FontData::from_static(include_bytes!(

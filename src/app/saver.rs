@@ -122,7 +122,7 @@ impl PhotonApp {
                         .unwrap_or_else(|| path.display().to_string()),
                 ),
                 Err(e) => {
-                    println!("Failed to save image to {:?}: {}", path, e);
+                    log::error!("Failed to save image to {:?}: {}", path, e);
                     Err(e)
                 }
             };

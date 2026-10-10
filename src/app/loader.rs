@@ -109,7 +109,7 @@ impl PhotonApp {
                                 // The fallback is Error so an unknown prefix yields the more
                                 // general overlay — never a misleadingly specific one.
                                 let is_format_error = e.starts_with("Failed to decode");
-                                println!("Failed to load image {:?}: {}", req.path, e);
+                                log::warn!("Failed to load image {:?}: {}", req.path, e);
                                 let _ = res_tx.send(LoadResult::Failed {
                                     path: Some(req.path.clone()),
                                     is_format_error,
@@ -154,7 +154,7 @@ impl PhotonApp {
                             width, height, max_dim
                         )
                     };
-                    println!("Failed to load image {:?}: {}", path_for_tx, reason);
+                    log::warn!("Failed to load image {:?}: {}", path_for_tx, reason);
                     let _ = res_tx.send(LoadResult::Failed {
                         path: path_for_tx,
                         is_format_error: false,
@@ -214,14 +214,14 @@ impl PhotonApp {
                     rgba_for_res.or_else(|| is_active_load.then_some(decoded.layers));
 
                 if let Some(ref path) = path_for_tx {
-                    println!(
+                    log::info!(
                         "Worker loaded: {:?} | {} layer(s) | Total: {:?}",
                         path.file_name(),
                         views.len(),
                         start_total.elapsed()
                     );
                 } else {
-                    println!(
+                    log::info!(
                         "Worker created pasted texture | Total: {:?}",
                         start_total.elapsed()
                     );
@@ -494,7 +494,7 @@ impl PhotonApp {
                             ctx.request_repaint();
                         } else {
                             // Stale preload failure — leave the active image alone.
-                            println!("Stale preload failed for {:?}: {}", path, message);
+                            log::debug!("Stale preload failed for {:?}: {}", path, message);
                         }
                     }
                 }

@@ -4,6 +4,7 @@ mod image_loader;
 use crate::app::PhotonApp;
 use eframe::egui;
 use eframe::egui_wgpu::WgpuConfiguration;
+use egui_phosphor::regular as icons;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -34,98 +35,38 @@ impl eframe::App for app::PhotonApp {
                 } = event
                 {
                     if *pressed {
-                        println!("DEBUG: Key Pressed {:?} (Modifiers: {:?})", key, modifiers);
+                        log::debug!("Key Pressed {:?} (Modifiers: {:?})", key, modifiers);
                     }
                 }
             }
         });
 
         // Shortcut / Interaction Handling
-        let mut do_open = false;
-        let mut do_save = false;
-        let mut do_copy = false;
-        let mut do_paste = false;
-        let mut is_mode_switch = false;
-        let mut do_next = false;
-        let mut do_prev = false;
-
-        ctx.input_mut(|i| {
-            if i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND,
-                egui::Key::O,
-            )) {
-                do_open = true;
-            }
-            if i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND,
-                egui::Key::S,
-            )) {
-                do_save = true;
-            }
-            if i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND,
-                egui::Key::C,
-            )) {
-                do_copy = true;
-            }
-            if i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND,
-                egui::Key::V,
-            )) {
-                do_paste = true;
-            }
-            if i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::NONE,
-                egui::Key::Backslash,
-            )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::NONE,
-                egui::Key::Tab,
-            )) {
-                is_mode_switch = true;
-            }
-            if i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::NONE,
-                egui::Key::Space,
-            )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::NONE,
-                egui::Key::ArrowRight,
-            )) {
-                do_next = true;
-            }
-            if i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::NONE,
-                egui::Key::Backspace,
-            )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::NONE,
-                egui::Key::ArrowLeft,
-            )) {
-                do_prev = true;
-            }
-        });
+        let actions = take_shortcut_actions(&ctx);
 
         // Execute Actions
-        if do_open {
+        if actions.open {
             self.open_file();
         }
-        if do_save {
-            println!("DEBUG: Save triggered");
+        if actions.save {
+            log::debug!("Save triggered");
             self.save_image_as();
         }
-        if do_copy {
-            println!("DEBUG: Stateful Copy Triggered");
+        if actions.copy {
+            log::debug!("Stateful Copy Triggered");
             self.copy_to_clipboard();
         }
-        if do_paste {
-            println!("DEBUG: Stateful Paste Triggered");
+        if actions.paste {
+            log::debug!("Stateful Paste Triggered");
             self.paste_from_clipboard(&ctx);
         }
-        if is_mode_switch {
+        if actions.mode_switch {
             self.cycle_mode();
         }
-        if do_next {
+        if actions.next {
             self.next_image();
         }
-        if do_prev {
+        if actions.prev {
             self.prev_image();
         }
 
@@ -199,7 +140,7 @@ impl eframe::App for app::PhotonApp {
         egui::Panel::top("toolbar").show_inside(ui, |ui| {
             // Far-right elements are laid out first (right-to-left)
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("⚙").clicked() {
+                if ui.button(icons::GEAR).clicked() {
                     self.settings_open = !self.settings_open;
                 }
                 ui.separator();
@@ -209,24 +150,30 @@ impl eframe::App for app::PhotonApp {
 
                 // Left-aligned elements fill the remaining space on the left (left-to-right)
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    if ui.button("📁 Open").clicked() {
+                    if ui
+                        .button(format!("{} Open", icons::FOLDER_OPEN))
+                        .clicked()
+                    {
                         self.open_file();
                     }
                     ui.separator();
-                    if ui.button("📋 Copy").clicked() {
+                    if ui.button(format!("{} Copy", icons::COPY)).clicked() {
                         self.copy_to_clipboard();
                     }
-                    if ui.button("📥 Paste").clicked() {
+                    if ui.button(format!("{} Paste", icons::CLIPBOARD)).clicked() {
                         self.paste_from_clipboard(&ctx);
                     }
-                    if ui.button("💾 Save").clicked() {
+                    if ui.button(format!("{} Save", icons::FLOPPY_DISK)).clicked() {
                         self.save_image_as();
                     }
                     if ui
                         .add_enabled(
                             self.mode == app::MouseMode::Select
                                 && self.selection_image_rect.is_some(),
-                            egui::Button::new("✂ Save Selection As\u{2026}"),
+                            egui::Button::new(format!(
+                                "{} Save Selection As\u{2026}",
+                                icons::SCISSORS
+                            )),
                         )
                         .clicked()
                     {
@@ -234,9 +181,9 @@ impl eframe::App for app::PhotonApp {
                     }
                     ui.separator();
                     let sidebar_btn = if self.sidebar_open {
-                        "◀ Sidebar"
+                        format!("{} Sidebar", icons::CARET_LEFT)
                     } else {
-                        "▶ Sidebar"
+                        format!("{} Sidebar", icons::CARET_RIGHT)
                     };
                     if ui.button(sidebar_btn).clicked() {
                         self.sidebar_open = !self.sidebar_open;
@@ -245,10 +192,16 @@ impl eframe::App for app::PhotonApp {
                         }
                     }
                     ui.separator();
-                    if ui.button("Prev").clicked() {
+                    if ui
+                        .button(format!("{} Prev", icons::CARET_LEFT))
+                        .clicked()
+                    {
                         self.prev_image();
                     }
-                    if ui.button("Next").clicked() {
+                    if ui
+                        .button(format!("{} Next", icons::CARET_RIGHT))
+                        .clicked()
+                    {
                         self.next_image();
                     }
                 });
@@ -409,11 +362,121 @@ impl eframe::App for app::PhotonApp {
     }
 }
 
+/// One frame's worth of shortcut actions, scanned off the egui input state.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ShortcutActions {
+    open: bool,
+    save: bool,
+    copy: bool,
+    paste: bool,
+    mode_switch: bool,
+    next: bool,
+    prev: bool,
+}
+
+/// Scan this frame's key presses and clipboard commands.
+///
+/// GOTCHA: egui-winit rewrites Ctrl+C / Ctrl+V / Ctrl+X at the input layer
+/// into `Event::Copy` / `Event::Paste` / `Event::Cut` (its TextEdit clipboard
+/// path) — on winit platforms the corresponding `Event::Key`s never arrive,
+/// so copy/paste cannot be matched with `consume_shortcut` alone. We listen
+/// for the command events AND keep the key-shortcut checks as a fallback for
+/// backends that don't rewrite; on any one platform only one path can fire.
+/// App-level handling deliberately takes these events before any widget:
+/// Photon has no TextEdits today, but if one is ever added, it will not see
+/// Ctrl+C/V and needs its own handling.
+fn take_shortcut_actions(ctx: &egui::Context) -> ShortcutActions {
+    let mut actions = ShortcutActions::default();
+
+    ctx.input_mut(|i| {
+        if i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::COMMAND,
+            egui::Key::O,
+        )) {
+            actions.open = true;
+        }
+        if i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::COMMAND,
+            egui::Key::S,
+        )) {
+            actions.save = true;
+        }
+        if i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::COMMAND,
+            egui::Key::C,
+        )) {
+            actions.copy = true;
+        }
+
+        // The real winit path: egui-winit turned Ctrl+C/V into command events.
+        // Consume them so no widget sees them later in the pass.
+        if i
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::Copy))
+        {
+            actions.copy = true;
+        }
+        if i
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::Paste(_)))
+        {
+            actions.paste = true;
+        }
+        i.events
+            .retain(|event| !matches!(event, egui::Event::Copy | egui::Event::Paste(_)));
+
+        if i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::COMMAND,
+            egui::Key::V,
+        )) {
+            actions.paste = true;
+        }
+        if i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::NONE,
+            egui::Key::Backslash,
+        )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::NONE,
+            egui::Key::Tab,
+        )) {
+            actions.mode_switch = true;
+        }
+        if i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::NONE,
+            egui::Key::Space,
+        )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::NONE,
+            egui::Key::ArrowRight,
+        )) {
+            actions.next = true;
+        }
+        if i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::NONE,
+            egui::Key::Backspace,
+        )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::NONE,
+            egui::Key::ArrowLeft,
+        )) {
+            actions.prev = true;
+        }
+    });
+
+    actions
+}
+
+
 fn main() -> eframe::Result<()> {
+    // Log to the terminal. Default: photon at info (loader timings, load
+    // failures), everything else at warn — dependency crates like zbus/wgpu
+    // are chatty at info. RUST_LOG overrides the whole filter.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("photon=info,warn"))
+        .init();
+
     #[cfg(debug_assertions)]
-    println!("WARNING: Running in DEBUG mode. Image decoding will be slow!");
+    log::warn!("Running in DEBUG mode. Image decoding will be slow!");
     #[cfg(not(debug_assertions))]
-    println!("Running in RELEASE mode.");
+    log::info!("Running in RELEASE mode.");
 
     let path = std::env::args().nth(1).map(PathBuf::from);
 
@@ -450,4 +513,73 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_events(events: Vec<egui::Event>) -> ShortcutActions {
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            events,
+            ..Default::default()
+        };
+        ctx.begin_pass(raw);
+        let actions = take_shortcut_actions(&ctx);
+        let _ = ctx.end_pass();
+        actions
+    }
+
+    fn key_event(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    /// The real winit path: egui-winit rewrites Ctrl+C/V into command events.
+    #[test]
+    fn clipboard_command_events_trigger_copy_and_paste() {
+        let actions = with_events(vec![egui::Event::Copy]);
+        assert!(actions.copy);
+        assert!(!actions.paste);
+
+        let actions = with_events(vec![egui::Event::Paste("pixels".into())]);
+        assert!(actions.paste);
+        assert!(!actions.copy);
+    }
+
+    /// Fallback for backends that deliver the raw key instead of rewriting it.
+    #[test]
+    fn ctrl_c_and_ctrl_v_key_events_trigger_copy_and_paste() {
+        let actions = with_events(vec![key_event(egui::Key::C, egui::Modifiers::COMMAND)]);
+        assert!(actions.copy);
+
+        let actions = with_events(vec![key_event(egui::Key::V, egui::Modifiers::COMMAND)]);
+        assert!(actions.paste);
+    }
+
+    #[test]
+    fn navigation_and_mode_shortcuts_still_work() {
+        let actions = with_events(vec![key_event(egui::Key::Space, egui::Modifiers::NONE)]);
+        assert!(actions.next);
+
+        let actions = with_events(vec![key_event(egui::Key::ArrowLeft, egui::Modifiers::NONE)]);
+        assert!(actions.prev);
+
+        let actions = with_events(vec![key_event(egui::Key::Tab, egui::Modifiers::NONE)]);
+        assert!(actions.mode_switch);
+    }
+
+    #[test]
+    fn plain_key_press_without_shortcut_is_ignored() {
+        let actions = with_events(vec![key_event(egui::Key::C, egui::Modifiers::NONE)]);
+        assert!(!actions.copy);
+        assert!(!actions.open);
+        assert!(!actions.save);
+    }
 }

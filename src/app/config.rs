@@ -31,7 +31,7 @@ pub(crate) fn config_path() -> Option<PathBuf> {
 /// defaults; a malformed file yields defaults (the caller warns).
 pub(crate) fn parse_config(text: &str) -> AppSettings {
     ron::from_str(text).unwrap_or_else(|e| {
-        println!("Config: failed to parse config.ron ({}), using defaults", e);
+        log::warn!("Config: failed to parse config.ron ({}), using defaults", e);
         AppSettings::default()
     })
 }
@@ -40,7 +40,7 @@ pub(crate) fn parse_config(text: &str) -> AppSettings {
 pub(crate) fn serialize_settings(settings: &AppSettings) -> String {
     ron::ser::to_string_pretty(settings, ron::ser::PrettyConfig::default())
         .unwrap_or_else(|e| {
-            println!("Config: failed to serialize settings ({}), writing defaults", e);
+            log::error!("Config: failed to serialize settings ({}), writing defaults", e);
             ron::ser::to_string_pretty(&AppSettings::default(), ron::ser::PrettyConfig::default())
                 .expect("default settings always serialize")
         })
@@ -73,7 +73,7 @@ impl PhotonApp {
         };
         if let Some(dir) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(dir) {
-                println!("Failed to create config dir {:?}: {}", dir, e);
+                log::error!("Failed to create config dir {:?}: {}", dir, e);
                 return;
             }
         }
@@ -83,7 +83,7 @@ impl PhotonApp {
                 std::fs::rename(&tmp, &path)
             });
         if let Err(e) = write {
-            println!("Failed to write config {:?}: {}", path, e);
+            log::error!("Failed to write config {:?}: {}", path, e);
         }
     }
 }

@@ -76,7 +76,7 @@ pub(crate) fn current_rgba(app: &PhotonApp) -> Option<(Vec<u8>, u32, u32)> {
                 Some((rgba, decoded.width, decoded.height))
             }
             Err(e) => {
-                println!("Failed to load image: {}", e);
+                log::warn!("Failed to load image: {}", e);
                 None
             }
         }
@@ -104,7 +104,7 @@ impl PhotonApp {
             let mut clipboard = match Clipboard::new() {
                 Ok(c) => c,
                 Err(e) => {
-                    println!("Clipboard error: {}", e);
+                    log::error!("Clipboard error: {}", e);
                     return;
                 }
             };
@@ -116,7 +116,7 @@ impl PhotonApp {
             };
 
             if let Err(e) = clipboard.set_image(img_data) {
-                println!("Failed to set clipboard: {}", e);
+                log::error!("Failed to set clipboard: {}", e);
             }
         });
     }
@@ -125,7 +125,7 @@ impl PhotonApp {
         let mut clipboard = match Clipboard::new() {
             Ok(c) => c,
             Err(e) => {
-                println!("Clipboard error: {}", e);
+                log::error!("Clipboard error: {}", e);
                 return;
             }
         };
@@ -150,7 +150,7 @@ impl PhotonApp {
                 }
             }
             Err(e) => {
-                println!("No image in clipboard or failed to get image: {}", e);
+                log::info!("No image in clipboard or failed to get image: {}", e);
             }
         }
     }

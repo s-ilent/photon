@@ -1,5 +1,6 @@
 use crate::app::{MouseMode, PhotonApp, StatusOverlay};
 use eframe::egui;
+use egui_phosphor::regular as icons;
 
 impl PhotonApp {
     pub(crate) fn ui_status_overlay(&self, ctx: &egui::Context, state: StatusOverlay) {
@@ -37,7 +38,7 @@ impl PhotonApp {
                         }
                         StatusOverlay::Error(err) => {
                             // Dracula Red Alert Cross + Error Text
-                            ui.label(egui::RichText::new("❌").size(32.0));
+                            ui.label(egui::RichText::new(icons::X_CIRCLE).size(32.0));
                             ui.add_space(8.0);
                             ui.add(
                                 egui::Label::new(
@@ -51,7 +52,7 @@ impl PhotonApp {
                         }
                         StatusOverlay::UnsupportedFormat(filename) => {
                             // Dracula Orange Alert Question Mark + Warning Text
-                            ui.label(egui::RichText::new("❓").size(32.0));
+                            ui.label(egui::RichText::new(icons::QUESTION).size(32.0));
                             ui.add_space(8.0);
                             ui.add(
                                 egui::Label::new(
