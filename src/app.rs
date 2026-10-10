@@ -43,7 +43,9 @@ pub enum LoadResult {
         view: wgpu::TextureView,
         width: u32,
         height: u32,
-        /// Only set for `Paste`; always `None` for `Load`.
+        /// Set for `Paste` and `Active` loads so copy/save can reuse the
+        /// decoded bytes; `None` for `Preload` so the bounded result channel
+        /// doesn't pin several full-size buffers at once.
         rgba: Option<Vec<u8>>,
     },
     Failed {
@@ -170,6 +172,10 @@ pub struct PhotonApp {
     pub(crate) scroll_to_target: bool,
     pub(crate) scroll_accumulator: f32,
     pub(crate) pasted_rgba: Option<Vec<u8>>,
+    /// Decoded RGBA bytes of the image at `target_path`, set when its `Active`
+    /// load completes. Lets copy/save work from memory instead of re-reading
+    /// and re-decoding the file; cleared whenever the target changes.
+    pub(crate) active_rgba: Option<Vec<u8>>,
     /// Active error overlay for the currently targeted image. `None` when
     /// the current target is fine (loading, loaded, or no target). Set by
     /// `check_load_complete` when a `LoadResult::Failed` for the active
@@ -211,6 +217,7 @@ impl PhotonApp {
             scroll_to_target: false,
             scroll_accumulator: 0.0,
             pasted_rgba: None,
+            active_rgba: None,
             error_overlay: None,
         }
     }

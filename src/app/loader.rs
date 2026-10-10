@@ -93,11 +93,14 @@ impl PhotonApp {
                 // Process request
                 let start_total = Instant::now();
 
-                let (rgba_for_texture, width, height, path_for_tx, rgba_for_res) =
+                let (rgba_for_texture, width, height, path_for_tx, rgba_for_res, is_active_load) =
                     match msg_to_process {
                         Some(WorkerMessage::Load(ref req)) => {
                             match crate::image_loader::load_image(&req.path) {
-                                Ok((data, w, h, _)) => (data, w, h, Some(req.path.clone()), None),
+                                Ok((data, w, h, _)) => {
+                                    let active = req.priority == Priority::Active;
+                                    (data, w, h, Some(req.path.clone()), None, active)
+                                }
                                 Err(e) => {
                                     // Surface the error to the main thread instead of swallowing it.
                                     // Classify by the prefix of the string error from image_loader:
@@ -120,7 +123,7 @@ impl PhotonApp {
                             rgba,
                             width,
                             height,
-                        }) => (rgba.clone(), width, height, None, Some(rgba.clone())),
+                        }) => (rgba.clone(), width, height, None, Some(rgba), true),
                         None => continue,
                     };
 
@@ -186,6 +189,12 @@ impl PhotonApp {
                 let view = texture.create_view(&Default::default());
                 let _upload_time = upload_start.elapsed();
 
+                // Hand the decoded bytes back with Active/Paste results so
+                // copy/save can reuse them without re-reading the file. The
+                // texture upload only borrows, so the buffer moves for free.
+                let rgba_for_res =
+                    rgba_for_res.or_else(|| is_active_load.then_some(rgba_for_texture));
+
                 if let Some(ref path) = path_for_tx {
                     println!(
                         "Worker loaded: {:?} | Total: {:?}",
@@ -238,6 +247,12 @@ impl PhotonApp {
         self.error_overlay = None;
 
         let path = self.images[self.current_index].clone();
+
+        // Drop the previous image's decoded bytes when the target changes;
+        // refreshed when the new target's Active load completes.
+        if self.target_path.as_ref() != Some(&path) {
+            self.active_rgba = None;
+        }
 
         // 1. Check if already in cache and fully loaded
         if let Some((id, w, h)) = self.texture_cache.get(&path).cloned() {
@@ -380,6 +395,7 @@ impl PhotonApp {
                                     self.pasted_rgba = rgba;
                                 } else {
                                     self.pasted_rgba = None;
+                                    self.active_rgba = rgba;
                                 }
 
                                 if self.settings.scale_to_fit {

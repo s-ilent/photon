@@ -42,8 +42,9 @@ pub(crate) fn crop_rgba(
 }
 
 /// Resolve the "current" RGBA bytes + dimensions for the displayed image.
-/// Uses `pasted_rgba` for pasted images; re-decodes from disk for loaded
-/// images (same behavior as the pre-existing copy path).
+/// Uses `pasted_rgba` for pasted images, `active_rgba` for the loaded image
+/// the worker already decoded, and only re-reads from disk as a fallback
+/// (e.g. a cache hit that never went through the worker).
 /// Returns `None` if there is nothing to save.
 pub(crate) fn current_rgba(app: &PhotonApp) -> Option<(Vec<u8>, u32, u32)> {
     if app.is_pasted {
@@ -52,6 +53,14 @@ pub(crate) fn current_rgba(app: &PhotonApp) -> Option<(Vec<u8>, u32, u32)> {
         Some((rgba, w, h))
     } else {
         let path = app.images.get(app.current_index)?;
+
+        if app.target_path.as_ref() == Some(path) {
+            if let Some(rgba) = &app.active_rgba {
+                let (w, h) = app.image_dimensions?;
+                return Some((rgba.clone(), w, h));
+            }
+        }
+
         match image_loader::load_image(path) {
             Ok((data, w, h, _)) => Some((data, w, h)),
             Err(e) => {
