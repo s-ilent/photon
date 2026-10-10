@@ -124,6 +124,29 @@ impl PhotonApp {
                         None => continue,
                     };
 
+                // Reject images the GPU can't represent before touching wgpu.
+                // An oversized texture used to sail through as Loaded and only
+                // fail asynchronously in wgpu validation, leaving the UI
+                // spinning forever with no error surfaced.
+                let max_dim = device.limits().max_texture_dimension_2d;
+                if width == 0 || height == 0 || width > max_dim || height > max_dim {
+                    let reason = if width == 0 || height == 0 {
+                        format!("Image has zero extent ({}x{})", width, height)
+                    } else {
+                        format!(
+                            "Image is {}x{}, exceeding the GPU texture limit of {}px",
+                            width, height, max_dim
+                        )
+                    };
+                    println!("Failed to load image {:?}: {}", path_for_tx, reason);
+                    let _ = res_tx.send(LoadResult::Failed {
+                        path: path_for_tx,
+                        is_format_error: false,
+                        message: reason,
+                    });
+                    continue;
+                }
+
                 let upload_start = Instant::now();
                 let texture = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("image_texture"),
