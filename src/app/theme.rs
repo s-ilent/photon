@@ -19,6 +19,11 @@ impl PhotonApp {
         ctx.set_visuals(visuals);
 
         let mut style = (*ctx.global_style()).clone();
+        // Photon is a viewer: no selectable text anywhere. egui's selectable
+        // labels engage a text-selection cursor with its own scroll-to-cursor
+        // behavior (offset cursors on overlay text, sidebar jumping when
+        // modifier keys are pressed).
+        style.interaction.selectable_labels = false;
         for text_style in [
             egui::TextStyle::Body,
             egui::TextStyle::Monospace,
@@ -30,6 +35,14 @@ impl PhotonApp {
             }
         }
         ctx.set_global_style(style);
+    }
+
+    /// egui default light visuals, with the same no-selectable-text rule.
+    pub(crate) fn setup_light_theme(ctx: &egui::Context) {
+        let mut style = (*ctx.global_style()).clone();
+        style.interaction.selectable_labels = false;
+        ctx.set_global_style(style);
+        ctx.set_visuals(egui::Visuals::light());
     }
 
     pub(crate) fn load_custom_font(ctx: &egui::Context) {

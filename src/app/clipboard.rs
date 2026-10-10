@@ -52,8 +52,13 @@ fn displayed_layer(layers: &[Vec<u8>], layer: usize) -> Option<&Vec<u8>> {
 /// `pasted_rgba` for pasted images, `active_rgba` for the loaded image the
 /// worker already decoded, and only re-reads from disk as a fallback
 /// (e.g. a cache hit that never went through the worker).
-/// Returns `None` if there is nothing to save.
+/// Returns `None` when there is nothing to save or the error overlay is up
+/// (a failed load leaves no image to copy — without the guard, Ctrl+C would
+/// silently copy the previous image's bytes).
 pub(crate) fn current_rgba(app: &PhotonApp) -> Option<(Vec<u8>, u32, u32)> {
+    if app.error_overlay.is_some() {
+        return None;
+    }
     if app.is_pasted {
         let rgba = app.pasted_rgba.clone()?;
         let (w, h) = app.image_dimensions?;

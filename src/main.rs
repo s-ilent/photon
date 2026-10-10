@@ -19,7 +19,7 @@ impl eframe::App for app::PhotonApp {
             if self.settings.dark_mode {
                 app::PhotonApp::setup_dracula_theme(&ctx, self.settings.font_size);
             } else {
-                ctx.set_visuals(egui::Visuals::light());
+                app::PhotonApp::setup_light_theme(&ctx);
             }
             app::PhotonApp::load_custom_font(&ctx);
         }
@@ -108,24 +108,12 @@ impl eframe::App for app::PhotonApp {
                                 }
                             });
                     });
-                    if ui
-                        .checkbox(
-                            &mut self.settings.use_sharp_scaling,
-                            "Use Sharp (Pixel) Scaling",
-                        )
-                        .changed()
-                    {
-                        // Swap the displayed texture's sampler in place
-                        // (field-level, so the closure captures stay disjoint
-                        // from the &mut self.settings_open the Window holds).
-                        self.image_texture_id = if self.settings.use_sharp_scaling {
-                            self.layer_texture_ids_nearest
-                                .get(self.current_layer)
-                                .copied()
-                        } else {
-                            self.layer_texture_ids.get(self.current_layer).copied()
-                        };
-                    }
+                    // Sharp (pixel) scaling is a shader-pass feature; the
+                    // toggle persists but has no effect until then.
+                    ui.checkbox(
+                        &mut self.settings.use_sharp_scaling,
+                        "Use Sharp (Pixel) Scaling",
+                    );
                     ui.checkbox(
                         &mut self.settings.checkerboard_bg,
                         "Checkerboard background",
@@ -147,7 +135,7 @@ impl eframe::App for app::PhotonApp {
                         if self.settings.dark_mode {
                             app::PhotonApp::setup_dracula_theme(&ctx, self.settings.font_size);
                         } else {
-                            ctx.set_visuals(egui::Visuals::light());
+                            app::PhotonApp::setup_light_theme(&ctx);
                         }
                     }
                 });
@@ -489,7 +477,7 @@ fn take_shortcut_actions(ctx: &egui::Context) -> ShortcutActions {
         }
         if i.consume_shortcut(&egui::KeyboardShortcut::new(
             egui::Modifiers::NONE,
-            egui::Key::Enter,
+            egui::Key::F11,
         )) {
             actions.fullscreen = true;
         }
@@ -522,6 +510,20 @@ fn main() -> eframe::Result<()> {
                 .with_decorations(true),
             wgpu_options: WgpuConfiguration {
                 present_mode: wgpu::PresentMode::Mailbox,
+                // Raise the texture-size ceiling where the adapter supports
+                // it (most desktop GPUs do 16384; the worker's oversized
+                // guard reads the live limit, so it adapts automatically).
+                wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
+                    device_descriptor: Arc::new(|adapter| wgpu::DeviceDescriptor {
+                        required_limits: wgpu::Limits {
+                            max_texture_dimension_2d: 16384
+                                .min(adapter.limits().max_texture_dimension_2d),
+                            ..wgpu::Limits::default()
+                        },
+                        ..Default::default()
+                    }),
+                    ..egui_wgpu::WgpuSetupCreateNew::without_display_handle()
+                }),
                 ..Default::default()
             },
             ..Default::default()
@@ -617,8 +619,8 @@ mod tests {
     }
 
     #[test]
-    fn enter_toggles_fullscreen() {
-        let actions = with_events(vec![key_event(egui::Key::Enter, egui::Modifiers::NONE)]);
+    fn f11_toggles_fullscreen() {
+        let actions = with_events(vec![key_event(egui::Key::F11, egui::Modifiers::NONE)]);
         assert!(actions.fullscreen);
     }
 }
