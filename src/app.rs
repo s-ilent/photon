@@ -78,10 +78,13 @@ pub struct SaveStatus {
 }
 
 /// A cached image: one registered texture per layer plus shared dimensions.
-/// All `ids` belong together and are freed together on eviction.
+/// `ids` use linear sampling, `nearest_ids` nearest — same views registered
+/// twice so `use_sharp_scaling` can pick per frame without re-uploading.
+/// All ids belong together and are freed together on eviction.
 #[derive(Clone)]
 pub struct CachedTextures {
     pub(crate) ids: Vec<egui::TextureId>,
+    pub(crate) nearest_ids: Vec<egui::TextureId>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     /// True when the layers are cubemap faces (drives face labels).
@@ -228,6 +231,8 @@ pub struct PhotonApp {
     /// (cubemap faces in DirectX order for cubemaps). Single-layer images
     /// have exactly one entry; `image_texture_id` is the displayed one.
     pub(crate) layer_texture_ids: Vec<egui::TextureId>,
+    /// Nearest-sampled twins of `layer_texture_ids`, same order.
+    pub(crate) layer_texture_ids_nearest: Vec<egui::TextureId>,
     /// Which of `layer_texture_ids` is displayed.
     pub(crate) current_layer: usize,
     /// True when the loaded layers are cubemap faces (drives face labels).
@@ -286,6 +291,7 @@ impl PhotonApp {
             needs_fit: false,
             dir_load_receiver: None,
             layer_texture_ids: Vec::new(),
+            layer_texture_ids_nearest: Vec::new(),
             current_layer: 0,
             layers_are_cubemap: false,
             is_loading_dir: false,
@@ -314,7 +320,21 @@ impl PhotonApp {
             return;
         }
         self.current_layer = index;
-        self.image_texture_id = Some(self.layer_texture_ids[index]);
+        self.image_texture_id = self.displayed_texture_id();
+    }
+
+    /// The texture id to draw right now: the displayed layer, sampled
+    /// linearly or nearest per the sharp-scaling setting.
+    pub(crate) fn displayed_texture_id(&self) -> Option<egui::TextureId> {
+        let (list, fallback) = if self.settings.use_sharp_scaling {
+            (
+                &self.layer_texture_ids_nearest,
+                self.image_texture_id,
+            )
+        } else {
+            (&self.layer_texture_ids, self.image_texture_id)
+        };
+        list.get(self.current_layer).copied().or(fallback)
     }
 
     /// Bottom-bar label for layer `index` of the displayed image: cubemap

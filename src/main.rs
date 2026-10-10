@@ -97,10 +97,24 @@ impl eframe::App for app::PhotonApp {
                                 }
                             });
                     });
-                    ui.checkbox(
-                        &mut self.settings.use_sharp_scaling,
-                        "Use Sharp (Pixel) Scaling",
-                    );
+                    if ui
+                        .checkbox(
+                            &mut self.settings.use_sharp_scaling,
+                            "Use Sharp (Pixel) Scaling",
+                        )
+                        .changed()
+                    {
+                        // Swap the displayed texture's sampler in place
+                        // (field-level, so the closure captures stay disjoint
+                        // from the &mut self.settings_open the Window holds).
+                        self.image_texture_id = if self.settings.use_sharp_scaling {
+                            self.layer_texture_ids_nearest
+                                .get(self.current_layer)
+                                .copied()
+                        } else {
+                            self.layer_texture_ids.get(self.current_layer).copied()
+                        };
+                    }
                     ui.checkbox(
                         &mut self.settings.checkerboard_bg,
                         "Checkerboard background",

@@ -281,9 +281,10 @@ impl PhotonApp {
             // different size (per the configured ZoomReset behavior).
             let dimensions_changed = self.image_dimensions != Some((cached.width, cached.height));
             self.layer_texture_ids = cached.ids;
+            self.layer_texture_ids_nearest = cached.nearest_ids;
             self.current_layer = 0;
             self.layers_are_cubemap = cached.is_cubemap;
-            self.image_texture_id = self.layer_texture_ids.first().copied();
+            self.image_texture_id = self.displayed_texture_id();
             self.image_dimensions = Some((cached.width, cached.height));
             self.target_path = Some(path.clone());
             self.is_loading = false;
@@ -357,18 +358,27 @@ impl PhotonApp {
                             // 1. If this path is already cached, free the old
                             //    texture set unless it's what's on screen.
                             if let Some(cached) = self.texture_cache.get(&effective_path) {
-                                for old_id in &cached.ids {
+                                for old_id in cached.ids.iter().chain(cached.nearest_ids.iter()) {
                                     if Some(*old_id) != self.image_texture_id {
                                         renderer.free_texture(old_id);
                                     }
                                 }
                             }
 
-                            // 2. Register every layer of the new image
+                            // 2. Register every layer twice: linear (default)
+                            //    and nearest (sharp-scaling) samplers.
                             let new_ids: Vec<egui::TextureId> = texture_views
                                 .iter()
                                 .map(|view| {
-                                    renderer.register_native_texture(device, view, FilterMode::Linear)
+                                    renderer
+                                        .register_native_texture(device, view, FilterMode::Linear)
+                                })
+                                .collect();
+                            let new_nearest_ids: Vec<egui::TextureId> = texture_views
+                                .iter()
+                                .map(|view| {
+                                    renderer
+                                        .register_native_texture(device, view, FilterMode::Nearest)
                                 })
                                 .collect();
 
@@ -377,9 +387,11 @@ impl PhotonApp {
                                 // Manually pop to avoid leaking the GPU resources
                                 if let Some((_, evicted)) = self.texture_cache.pop_lru() {
                                     // Only free ids not currently on screen
-                                    for evict_id in evicted.ids {
-                                        if Some(evict_id) != self.image_texture_id {
-                                            renderer.free_texture(&evict_id);
+                                    for evict_id in
+                                        evicted.ids.iter().chain(evicted.nearest_ids.iter())
+                                    {
+                                        if Some(*evict_id) != self.image_texture_id {
+                                            renderer.free_texture(evict_id);
                                         }
                                     }
                                 }
@@ -388,6 +400,7 @@ impl PhotonApp {
                                 effective_path.clone(),
                                 CachedTextures {
                                     ids: new_ids.clone(),
+                                    nearest_ids: new_nearest_ids.clone(),
                                     width,
                                     height,
                                     is_cubemap,
@@ -404,10 +417,15 @@ impl PhotonApp {
                             if is_active {
                                 // 5. Free the previous image's textures that
                                 //    are no longer in the cache.
-                                for old_id in std::mem::take(&mut self.layer_texture_ids) {
+                                let old_ids = std::mem::take(&mut self.layer_texture_ids)
+                                    .into_iter()
+                                    .chain(std::mem::take(&mut self.layer_texture_ids_nearest));
+                                for old_id in old_ids {
                                     let mut in_cache = false;
                                     for (_, cached) in self.texture_cache.iter() {
-                                        if cached.ids.contains(&old_id) {
+                                        if cached.ids.contains(&old_id)
+                                            || cached.nearest_ids.contains(&old_id)
+                                        {
                                             in_cache = true;
                                             break;
                                         }
@@ -420,9 +438,16 @@ impl PhotonApp {
                                 let dimensions_changed =
                                     self.image_dimensions != Some((width, height));
                                 self.layer_texture_ids = new_ids;
+                                self.layer_texture_ids_nearest = new_nearest_ids;
                                 self.current_layer = 0;
                                 self.layers_are_cubemap = is_cubemap;
-                                self.image_texture_id = self.layer_texture_ids.first().copied();
+                                // displayed_texture_id() inline: &self would
+                                // overlap the load_receiver borrow above.
+                                self.image_texture_id = if self.settings.use_sharp_scaling {
+                                    self.layer_texture_ids_nearest.first().copied()
+                                } else {
+                                    self.layer_texture_ids.first().copied()
+                                };
                                 self.image_dimensions = Some((width, height));
                                 self.is_loading = false;
                                 self.error_overlay = None;
@@ -454,14 +479,13 @@ impl PhotonApp {
                                 if self.settings.scale_to_fit {
                                     self.needs_fit = true;
                                 }
-                            } else if self.is_loading {
-                                // Display the progressive intermediate image, keeping is_loading active
-                                self.layer_texture_ids = new_ids;
-                                self.current_layer = 0;
-                                self.layers_are_cubemap = is_cubemap;
-                                self.image_texture_id = self.layer_texture_ids.first().copied();
-                                self.image_dimensions = Some((width, height));
                             }
+                            // Non-target results (neighbor preloads, stale
+                            // actives) are cached above but never displayed:
+                            // showing them as a dimmed "intermediate" put the
+                            // neighbor's pixels on screen for the wrong file.
+                            // While loading, the previous image stays visible
+                            // under the spinner until the target arrives.
 
                             ctx.request_repaint();
                         }
@@ -517,7 +541,7 @@ impl PhotonApp {
 
             // 2. Free everything in cache
             while let Some((_, cached)) = self.texture_cache.pop_lru() {
-                for id in cached.ids {
+                for id in cached.ids.into_iter().chain(cached.nearest_ids) {
                     renderer.free_texture(&id);
                 }
             }
@@ -660,6 +684,7 @@ mod tests {
                 PathBuf::from(name),
                 CachedTextures {
                     ids: vec![egui::TextureId::User(0)],
+                    nearest_ids: vec![egui::TextureId::User(1)],
                     width: *w,
                     height: *h,
                     is_cubemap: false,
@@ -719,5 +744,20 @@ mod tests {
         app.current_index = 1;
         app.request_current();
         assert_eq!(app.zoom, 1.0);
+    }
+
+    #[test]
+    fn sharp_scaling_picks_the_nearest_sampler() {
+        let mut app = cached_app(&[("a.png", 100, 100)]);
+        app.current_index = 0;
+
+        app.settings.use_sharp_scaling = false;
+        app.request_current();
+        assert_eq!(app.image_texture_id, Some(egui::TextureId::User(0)));
+
+        app.settings.use_sharp_scaling = true;
+        app.request_current();
+        assert_eq!(app.image_texture_id, Some(egui::TextureId::User(1)));
+        assert_eq!(app.displayed_texture_id(), Some(egui::TextureId::User(1)));
     }
 }
