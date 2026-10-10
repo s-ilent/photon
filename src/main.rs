@@ -69,6 +69,17 @@ impl eframe::App for app::PhotonApp {
         if actions.prev {
             self.prev_image();
         }
+        if actions.fullscreen {
+            let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+        }
+
+        // Drag-and-drop: open a dropped folder, or a dropped file together
+        // with its parent folder (same as the Open dialog).
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if let Some(path) = dropped.iter().find_map(|f| f.path.clone()) {
+            self.open_path(path);
+        }
 
         // 0. Settings Window
         if self.settings_open {
@@ -386,6 +397,7 @@ struct ShortcutActions {
     mode_switch: bool,
     next: bool,
     prev: bool,
+    fullscreen: bool,
 }
 
 /// Scan this frame's key presses and clipboard commands.
@@ -473,6 +485,12 @@ fn take_shortcut_actions(ctx: &egui::Context) -> ShortcutActions {
             egui::Key::ArrowLeft,
         )) {
             actions.prev = true;
+        }
+        if i.consume_shortcut(&egui::KeyboardShortcut::new(
+            egui::Modifiers::NONE,
+            egui::Key::Enter,
+        )) {
+            actions.fullscreen = true;
         }
     });
 
@@ -595,5 +613,11 @@ mod tests {
         assert!(!actions.copy);
         assert!(!actions.open);
         assert!(!actions.save);
+    }
+
+    #[test]
+    fn enter_toggles_fullscreen() {
+        let actions = with_events(vec![key_event(egui::Key::Enter, egui::Modifiers::NONE)]);
+        assert!(actions.fullscreen);
     }
 }

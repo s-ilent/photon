@@ -391,6 +391,16 @@ impl PhotonApp {
             .pick_file();
 
         if let Some(path) = file {
+            self.open_path(path);
+        }
+    }
+
+    /// Open a file (loading its parent folder around it, like the Open
+    /// dialog) or a folder directly. Also the drag-and-drop entry point.
+    pub(crate) fn open_path(&mut self, path: PathBuf) {
+        if path.is_dir() {
+            self.load_directory(&path);
+        } else {
             self.is_pasted = false;
             self.target_path = Some(path.clone());
             if let Some(parent) = path.parent() {
