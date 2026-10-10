@@ -41,9 +41,16 @@ pub(crate) fn crop_rgba(
     (cropped, w, h)
 }
 
-/// Resolve the "current" RGBA bytes + dimensions for the displayed image.
-/// Uses `pasted_rgba` for pasted images, `active_rgba` for the loaded image
-/// the worker already decoded, and only re-reads from disk as a fallback
+/// The displayed layer of a decoded image: `layer` if present, else the last
+/// one (defensive — layers always share dimensions so indices line up).
+fn displayed_layer(layers: &[Vec<u8>], layer: usize) -> Option<&Vec<u8>> {
+    layers.get(layer).or_else(|| layers.last())
+}
+
+/// Resolve the "current" RGBA bytes + dimensions for the displayed image —
+/// specifically the displayed layer (cubemap face / array entry). Uses
+/// `pasted_rgba` for pasted images, `active_rgba` for the loaded image the
+/// worker already decoded, and only re-reads from disk as a fallback
 /// (e.g. a cache hit that never went through the worker).
 /// Returns `None` if there is nothing to save.
 pub(crate) fn current_rgba(app: &PhotonApp) -> Option<(Vec<u8>, u32, u32)> {
@@ -55,14 +62,19 @@ pub(crate) fn current_rgba(app: &PhotonApp) -> Option<(Vec<u8>, u32, u32)> {
         let path = app.images.get(app.current_index)?;
 
         if app.target_path.as_ref() == Some(path) {
-            if let Some(rgba) = &app.active_rgba {
-                let (w, h) = app.image_dimensions?;
-                return Some((rgba.clone(), w, h));
+            if let Some(layers) = &app.active_rgba {
+                if let Some(rgba) = displayed_layer(layers, app.current_layer) {
+                    let (w, h) = app.image_dimensions?;
+                    return Some((rgba.clone(), w, h));
+                }
             }
         }
 
         match image_loader::load_image(path) {
-            Ok((data, w, h, _)) => Some((data, w, h)),
+            Ok(decoded) => {
+                let rgba = displayed_layer(&decoded.layers, app.current_layer)?.clone();
+                Some((rgba, decoded.width, decoded.height))
+            }
             Err(e) => {
                 println!("Failed to load image: {}", e);
                 None
@@ -147,6 +159,22 @@ impl PhotonApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn current_rgba_uses_displayed_layer() {
+        let mut app = PhotonApp::new();
+        app.images = vec![PathBuf::from("/cube.dds")];
+        app.target_path = Some(PathBuf::from("/cube.dds"));
+        app.active_rgba = Some(vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2], vec![3, 3, 3, 3]]);
+        app.image_dimensions = Some((1, 1));
+
+        app.current_layer = 1;
+        assert_eq!(current_rgba(&app).unwrap().0, vec![2, 2, 2, 2]);
+
+        app.current_layer = 2;
+        assert_eq!(current_rgba(&app).unwrap().0, vec![3, 3, 3, 3]);
+    }
 
     #[test]
     fn test_crop_rgba_full_when_rect_empty() {

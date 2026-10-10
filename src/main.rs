@@ -288,6 +288,28 @@ impl eframe::App for app::PhotonApp {
                         ui.label(format!("Selection: {:.0}x{:.0}", sel.width(), sel.height()));
                     }
                 }
+
+                // Cubemap face / array layer selector
+                if self.layer_texture_ids.len() > 1 {
+                    ui.separator();
+                    ui.label(if self.layers_are_cubemap { "Face:" } else { "Layer:" });
+                    egui::ScrollArea::horizontal().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for i in 0..self.layer_texture_ids.len() {
+                                let label = self.layer_label(i);
+                                if ui
+                                    .add(
+                                        egui::Button::new(label)
+                                            .selected(i == self.current_layer),
+                                    )
+                                    .clicked()
+                                {
+                                    self.select_layer(i);
+                                }
+                            }
+                        });
+                    });
+                }
             });
         });
 

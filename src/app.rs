@@ -42,13 +42,17 @@ pub enum WorkerMessage {
 pub enum LoadResult {
     Loaded {
         path: Option<PathBuf>,
-        view: wgpu::TextureView,
+        /// One registered-ready texture view per layer (cubemap face / array
+        /// entry); ordinary images have exactly one.
+        views: Vec<wgpu::TextureView>,
         width: u32,
         height: u32,
+        /// True when the layers are cubemap faces (drives face labels).
+        is_cubemap: bool,
         /// Set for `Paste` and `Active` loads so copy/save can reuse the
         /// decoded bytes; `None` for `Preload` so the bounded result channel
         /// doesn't pin several full-size buffers at once.
-        rgba: Option<Vec<u8>>,
+        rgba: Option<Vec<Vec<u8>>>,
     },
     Failed {
         path: Option<PathBuf>,
@@ -72,6 +76,20 @@ pub struct SaveStatus {
     pub(crate) message: String,
     pub(crate) expires: Instant,
 }
+
+/// A cached image: one registered texture per layer plus shared dimensions.
+/// All `ids` belong together and are freed together on eviction.
+#[derive(Clone)]
+pub struct CachedTextures {
+    pub(crate) ids: Vec<egui::TextureId>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    /// True when the layers are cubemap faces (drives face labels).
+    pub(crate) is_cubemap: bool,
+}
+
+/// Labels for cubemap faces in DirectX file order (+X, -X, +Y, -Y, +Z, -Z).
+const CUBEMAP_FACE_LABELS: [&str; 6] = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
 /// Mouse modes that change how input is interpreted
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -215,7 +233,7 @@ impl Default for AppSettings {
 pub struct PhotonApp {
     pub(crate) images: Vec<PathBuf>,
     pub(crate) current_index: usize,
-    pub(crate) texture_cache: LruCache<PathBuf, (egui::TextureId, u32, u32)>,
+    pub(crate) texture_cache: LruCache<PathBuf, CachedTextures>,
     pub(crate) load_receiver: Option<Receiver<LoadResult>>,
     pub(crate) request_sender: Option<Sender<WorkerMessage>>,
     pub(crate) latest_req_id: Arc<AtomicU64>,
@@ -240,14 +258,23 @@ pub struct PhotonApp {
     pub(crate) is_pasted: bool,
     pub(crate) needs_fit: bool,
     pub(crate) dir_load_receiver: Option<Receiver<Vec<PathBuf>>>,
+    /// Texture id of every layer of the displayed image, in file order
+    /// (cubemap faces in DirectX order for cubemaps). Single-layer images
+    /// have exactly one entry; `image_texture_id` is the displayed one.
+    pub(crate) layer_texture_ids: Vec<egui::TextureId>,
+    /// Which of `layer_texture_ids` is displayed.
+    pub(crate) current_layer: usize,
+    /// True when the loaded layers are cubemap faces (drives face labels).
+    pub(crate) layers_are_cubemap: bool,
     pub(crate) is_loading_dir: bool,
     pub(crate) scroll_to_target: bool,
     pub(crate) scroll_accumulator: f32,
     pub(crate) pasted_rgba: Option<Vec<u8>>,
-    /// Decoded RGBA bytes of the image at `target_path`, set when its `Active`
-    /// load completes. Lets copy/save work from memory instead of re-reading
-    /// and re-decoding the file; cleared whenever the target changes.
-    pub(crate) active_rgba: Option<Vec<u8>>,
+    /// Decoded RGBA bytes of the image at `target_path`, one buffer per layer,
+    /// set when its `Active` load completes. Lets copy/save work from memory
+    /// instead of re-reading and re-decoding the file; cleared whenever the
+    /// target changes.
+    pub(crate) active_rgba: Option<Vec<Vec<u8>>>,
     /// Receiver for the result of the most recent background save encode.
     pub(crate) save_status_receiver: Option<Receiver<Result<String, String>>>,
     /// Last save outcome, shown in the bottom bar until it expires.
@@ -292,6 +319,9 @@ impl PhotonApp {
             is_pasted: false,
             needs_fit: false,
             dir_load_receiver: None,
+            layer_texture_ids: Vec::new(),
+            current_layer: 0,
+            layers_are_cubemap: false,
             is_loading_dir: false,
             scroll_to_target: false,
             scroll_accumulator: 0.0,
@@ -309,6 +339,29 @@ impl PhotonApp {
         // Clear selection when switching modes
         self.selection = None;
         self.selection_start = None;
+    }
+
+    /// Display layer `index` of the loaded image (cubemap face / array entry).
+    /// All layers share dimensions, so zoom and pan are untouched.
+    pub(crate) fn select_layer(&mut self, index: usize) {
+        if index >= self.layer_texture_ids.len() {
+            return;
+        }
+        self.current_layer = index;
+        self.image_texture_id = Some(self.layer_texture_ids[index]);
+    }
+
+    /// Bottom-bar label for layer `index` of the displayed image: cubemap
+    /// face names where known, 1-based numbers otherwise.
+    pub(crate) fn layer_label(&self, index: usize) -> String {
+        if self.layers_are_cubemap {
+            CUBEMAP_FACE_LABELS
+                .get(index)
+                .map(|s| (*s).to_string())
+                .unwrap_or_else(|| (index + 1).to_string())
+        } else {
+            (index + 1).to_string()
+        }
     }
 
     pub(crate) fn next_image(&mut self) {
