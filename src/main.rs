@@ -15,7 +15,11 @@ impl eframe::App for app::PhotonApp {
         // 0. Initial Setup (First Frame)
         static STARTUP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
         if STARTUP.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            app::PhotonApp::setup_dracula_theme(&ctx, self.settings.font_size);
+            if self.settings.dark_mode {
+                app::PhotonApp::setup_dracula_theme(&ctx, self.settings.font_size);
+            } else {
+                ctx.set_visuals(egui::Visuals::light());
+            }
             app::PhotonApp::load_custom_font(&ctx);
         }
 
@@ -134,10 +138,24 @@ impl eframe::App for app::PhotonApp {
                         &mut self.settings.scale_to_fit,
                         "Scale to fit when switching images",
                     );
-                    ui.checkbox(
-                        &mut self.settings.keep_zoom,
-                        "Keep zoom level when switching images",
-                    );
+                    ui.horizontal(|ui| {
+                        ui.label("Reset zoom:");
+                        egui::ComboBox::from_id_salt("zoom_reset")
+                            .selected_text(self.settings.zoom_reset.label())
+                            .show_ui(ui, |ui| {
+                                for mode in [
+                                    app::ZoomReset::Always,
+                                    app::ZoomReset::DimensionChange,
+                                    app::ZoomReset::Never,
+                                ] {
+                                    ui.selectable_value(
+                                        &mut self.settings.zoom_reset,
+                                        mode,
+                                        mode.label(),
+                                    );
+                                }
+                            });
+                    });
                     ui.checkbox(
                         &mut self.settings.use_sharp_scaling,
                         "Use Sharp (Pixel) Scaling",
@@ -173,6 +191,9 @@ impl eframe::App for app::PhotonApp {
         self.check_load_complete(&ctx);
         self.check_dir_load_complete();
         self.check_save_status(&ctx);
+
+        // Persist settings when they changed this frame
+        self.save_config_if_changed();
 
         // 1. Top Toolbar (App State & Settings)
         egui::Panel::top("toolbar").show_inside(ui, |ui| {
@@ -257,16 +278,7 @@ impl eframe::App for app::PhotonApp {
                 if let Some(status) = &self.save_status {
                     if std::time::Instant::now() < status.expires {
                         ui.separator();
-                        let color = if status.is_error {
-                            egui::Color32::from_rgb(255, 85, 85)
-                        } else {
-                            egui::Color32::from_rgb(80, 250, 123)
-                        };
-                        ui.label(
-                            egui::RichText::new(&status.message)
-                                .strong()
-                                .color(color),
-                        );
+                        ui.label(&status.message);
                     }
                 }
 
@@ -406,6 +418,7 @@ fn main() -> eframe::Result<()> {
                 app.render_state = Some(Arc::new(wgpu_state.clone()));
             }
 
+            app.load_config();
             app.init_worker();
 
             if let Some(ref p) = path {

@@ -12,6 +12,7 @@ use wgpu::Device;
 // Submodule Declarations
 mod canvas;
 mod clipboard;
+mod config;
 mod loader;
 mod saver;
 mod theme;
@@ -69,7 +70,6 @@ pub enum StatusOverlay {
 #[derive(Debug, Clone)]
 pub struct SaveStatus {
     pub(crate) message: String,
-    pub(crate) is_error: bool,
     pub(crate) expires: Instant,
 }
 
@@ -122,16 +122,79 @@ impl SortMode {
             SortMode::FileSizeSmallest => "Size (Smallest)",
         }
     }
+
+    pub fn config_value(&self) -> &'static str {
+        match self {
+            SortMode::Alphabetical => "name_az",
+            SortMode::AlphabeticalDesc => "name_za",
+            SortMode::DateModified => "date_newest",
+            SortMode::DateModifiedOldest => "date_oldest",
+            SortMode::FileSize => "size_largest",
+            SortMode::FileSizeSmallest => "size_smallest",
+        }
+    }
+
+    pub fn from_config(value: &str) -> Option<Self> {
+        match value {
+            "name_az" => Some(SortMode::Alphabetical),
+            "name_za" => Some(SortMode::AlphabeticalDesc),
+            "date_newest" => Some(SortMode::DateModified),
+            "date_oldest" => Some(SortMode::DateModifiedOldest),
+            "size_largest" => Some(SortMode::FileSize),
+            "size_smallest" => Some(SortMode::FileSizeSmallest),
+            _ => None,
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
+/// When the view resets (back to fit) on an image switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ZoomReset {
+    /// Reset on every switch.
+    Always,
+    /// Reset only when the new image's dimensions differ from the previous one.
+    #[default]
+    DimensionChange,
+    /// Never reset; zoom and pan carry over between all images.
+    Never,
+}
+
+impl ZoomReset {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ZoomReset::Always => "Always",
+            ZoomReset::DimensionChange => "When dimensions change",
+            ZoomReset::Never => "Never",
+        }
+    }
+
+    pub fn config_value(&self) -> &'static str {
+        match self {
+            ZoomReset::Always => "always",
+            ZoomReset::DimensionChange => "dimension_change",
+            ZoomReset::Never => "never",
+        }
+    }
+
+    pub fn from_config(value: &str) -> Option<Self> {
+        match value {
+            "always" => Some(ZoomReset::Always),
+            "dimension_change" => Some(ZoomReset::DimensionChange),
+            "never" => Some(ZoomReset::Never),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AppSettings {
     pub dark_mode: bool,
     pub font_size: f32,
     pub scale_to_fit: bool,
     pub use_sharp_scaling: bool,
     pub checkerboard_bg: bool,
-    pub keep_zoom: bool,
+    /// Zoom-reset behavior on image switch; see `ZoomReset`.
+    pub zoom_reset: ZoomReset,
     pub sort_mode: SortMode,
 }
 
@@ -143,7 +206,7 @@ impl Default for AppSettings {
             scale_to_fit: true,
             use_sharp_scaling: false,
             checkerboard_bg: true,
-            keep_zoom: false,
+            zoom_reset: ZoomReset::default(),
             sort_mode: SortMode::default(),
         }
     }
@@ -189,6 +252,9 @@ pub struct PhotonApp {
     pub(crate) save_status_receiver: Option<Receiver<Result<String, String>>>,
     /// Last save outcome, shown in the bottom bar until it expires.
     pub(crate) save_status: Option<SaveStatus>,
+    /// Settings as of the last config-file write; `None` before the first
+    /// load. Compared each frame to detect changes worth persisting.
+    pub(crate) saved_settings: Option<AppSettings>,
     /// Active error overlay for the currently targeted image. `None` when
     /// the current target is fine (loading, loaded, or no target). Set by
     /// `check_load_complete` when a `LoadResult::Failed` for the active
@@ -233,6 +299,7 @@ impl PhotonApp {
             active_rgba: None,
             save_status_receiver: None,
             save_status: None,
+            saved_settings: None,
             error_overlay: None,
         }
     }

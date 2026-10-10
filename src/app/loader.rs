@@ -1,5 +1,6 @@
 use crate::app::{
     LoadRequest, LoadResult, PhotonApp, Priority, SortMode, StatusOverlay, WorkerMessage,
+    ZoomReset,
 };
 use crate::dir_walker;
 use eframe::egui;
@@ -266,8 +267,13 @@ impl PhotonApp {
             self.is_loading = false;
             self.is_pasted = false;
 
-            // Reset zoom on cached loads if keep_zoom is disabled
-            if !self.settings.keep_zoom && dimensions_changed {
+            // Reset zoom on cached loads according to the configured behavior.
+            let reset = match self.settings.zoom_reset {
+                ZoomReset::Always => true,
+                ZoomReset::DimensionChange => dimensions_changed,
+                ZoomReset::Never => false,
+            };
+            if reset {
                 self.zoom = 1.0;
                 self.pan = egui::Vec2::ZERO;
                 self.selection = None;
@@ -379,7 +385,12 @@ impl PhotonApp {
                                 self.is_loading = false;
                                 self.error_overlay = None;
 
-                                if !self.settings.keep_zoom && dimensions_changed {
+                                let reset = match self.settings.zoom_reset {
+                                    ZoomReset::Always => true,
+                                    ZoomReset::DimensionChange => dimensions_changed,
+                                    ZoomReset::Never => false,
+                                };
+                                if reset {
                                     self.zoom = 1.0;
                                     self.pan = egui::Vec2::ZERO;
                                     self.selection = None;
@@ -589,13 +600,13 @@ impl PhotonApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::PhotonApp;
+    use crate::app::{PhotonApp, ZoomReset};
 
     /// App with every image already in the texture cache, so `request_current`
     /// exercises the cached-load path without a worker or GPU device.
     fn cached_app(dims: &[(&str, u32, u32)]) -> PhotonApp {
         let mut app = PhotonApp::new();
-        app.settings.keep_zoom = false;
+        app.settings.zoom_reset = ZoomReset::DimensionChange;
         app.settings.scale_to_fit = false;
         for (name, w, h) in dims {
             app.texture_cache
@@ -631,9 +642,9 @@ mod tests {
     }
 
     #[test]
-    fn keep_zoom_survives_dimension_change() {
+    fn zoom_reset_never_preserves_zoom() {
         let mut app = cached_app(&[("a.png", 100, 100), ("b.png", 200, 200)]);
-        app.settings.keep_zoom = true;
+        app.settings.zoom_reset = ZoomReset::Never;
         app.current_index = 0;
         app.request_current();
         app.zoom = 5.0;
@@ -641,5 +652,18 @@ mod tests {
         app.current_index = 1;
         app.request_current();
         assert_eq!(app.zoom, 5.0);
+    }
+
+    #[test]
+    fn zoom_reset_always_resets_even_for_same_dimensions() {
+        let mut app = cached_app(&[("a.png", 100, 100), ("b.png", 100, 100)]);
+        app.settings.zoom_reset = ZoomReset::Always;
+        app.current_index = 0;
+        app.request_current();
+        app.zoom = 5.0;
+
+        app.current_index = 1;
+        app.request_current();
+        assert_eq!(app.zoom, 1.0);
     }
 }

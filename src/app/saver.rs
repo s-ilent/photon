@@ -136,13 +136,12 @@ impl PhotonApp {
     pub(crate) fn check_save_status(&mut self, ctx: &egui::Context) {
         if let Some(receiver) = self.save_status_receiver.take() {
             if let Ok(result) = receiver.try_recv() {
-                let (message, is_error) = match result {
-                    Ok(name) => (format!("Saved {}", name), false),
-                    Err(e) => (format!("Save failed: {}", e), true),
+                let message = match result {
+                    Ok(name) => format!("Saved {}", name),
+                    Err(e) => format!("Save failed: {}", e),
                 };
                 self.save_status = Some(SaveStatus {
                     message,
-                    is_error,
                     expires: Instant::now() + SAVE_STATUS_DURATION,
                 });
                 ctx.request_repaint();
