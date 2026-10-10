@@ -256,7 +256,9 @@ impl PhotonApp {
         let file = rfd::FileDialog::new()
             .add_filter(
                 "Images",
-                &["png", "jpg", "jpeg", "gif", "bmp", "tiff", "webp"],
+                &[
+                    "png", "jpg", "jpeg", "gif", "bmp", "tiff", "webp", "dds", "exr",
+                ],
             )
             .pick_file();
 
