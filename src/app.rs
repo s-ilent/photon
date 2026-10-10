@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
+use std::time::Instant;
 use wgpu::Device;
 
 // Submodule Declarations
@@ -62,6 +63,14 @@ pub enum StatusOverlay {
     Loading(String),
     Error(String),
     UnsupportedFormat(String),
+}
+
+/// Transient bottom-bar feedback for the background save encoder.
+#[derive(Debug, Clone)]
+pub struct SaveStatus {
+    pub(crate) message: String,
+    pub(crate) is_error: bool,
+    pub(crate) expires: Instant,
 }
 
 /// Mouse modes that change how input is interpreted
@@ -176,6 +185,10 @@ pub struct PhotonApp {
     /// load completes. Lets copy/save work from memory instead of re-reading
     /// and re-decoding the file; cleared whenever the target changes.
     pub(crate) active_rgba: Option<Vec<u8>>,
+    /// Receiver for the result of the most recent background save encode.
+    pub(crate) save_status_receiver: Option<Receiver<Result<String, String>>>,
+    /// Last save outcome, shown in the bottom bar until it expires.
+    pub(crate) save_status: Option<SaveStatus>,
     /// Active error overlay for the currently targeted image. `None` when
     /// the current target is fine (loading, loaded, or no target). Set by
     /// `check_load_complete` when a `LoadResult::Failed` for the active
@@ -218,6 +231,8 @@ impl PhotonApp {
             scroll_accumulator: 0.0,
             pasted_rgba: None,
             active_rgba: None,
+            save_status_receiver: None,
+            save_status: None,
             error_overlay: None,
         }
     }

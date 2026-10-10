@@ -1,7 +1,13 @@
 use crate::app::clipboard::{crop_rgba, current_rgba};
-use crate::app::PhotonApp;
+use crate::app::{PhotonApp, SaveStatus};
+use eframe::egui;
 use image::ExtendedColorType;
 use std::path::PathBuf;
+use std::sync::mpsc::channel;
+use std::time::{Duration, Instant};
+
+/// How long a save success/failure message stays in the bottom bar.
+const SAVE_STATUS_DURATION: Duration = Duration::from_secs(4);
 
 /// One entry in the save-as dialog's format dropdown. The first entry is the
 /// default selection. The `image` crate infers the on-disk format from the
@@ -22,7 +28,7 @@ impl PhotonApp {
     /// Always uses a save-as dialog; never overwrites the original unless the
     /// user explicitly points at it. Encodes in a background thread so the UI
     /// doesn't stall on a large file write.
-    pub(crate) fn save_image_as(&self) {
+    pub(crate) fn save_image_as(&mut self) {
         let (rgba, width, height) = match current_rgba(self) {
             Some(v) => v,
             None => return,
@@ -34,7 +40,7 @@ impl PhotonApp {
 
     /// Save the current selection crop as a new file. A no-op (returns) when
     /// there is no active selection or no image to crop from.
-    pub(crate) fn save_selection_as(&self) {
+    pub(crate) fn save_selection_as(&mut self) {
         let Some(selection_image_rect) = self.selection_image_rect else {
             return;
         };
@@ -79,7 +85,7 @@ impl PhotonApp {
     }
 
     fn save_dialog_and_encode(
-        &self,
+        &mut self,
         rgba: Vec<u8>,
         width: u32,
         height: u32,
@@ -103,12 +109,57 @@ impl PhotonApp {
         // Encoding/IO runs in a background thread so it doesn't freeze the
         // render loop. `image::save_buffer` infers the format from the file
         // extension the user typed (or the OS appended from the chosen filter).
-        // On failure we follow the existing convention: print to stdout.
+        // The result is reported through `save_status_receiver` and surfaced
+        // in the bottom bar; failures also keep the existing println.
+        let (tx, rx) = channel();
+        self.save_status_receiver = Some(rx);
+
         std::thread::spawn(move || {
-            if let Err(e) = encode_to_path(&path, &rgba, width, height) {
-                println!("Failed to save image to {:?}: {}", path, e);
-            }
+            let result = match encode_to_path(&path, &rgba, width, height) {
+                Ok(()) => Ok(
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.display().to_string()),
+                ),
+                Err(e) => {
+                    println!("Failed to save image to {:?}: {}", path, e);
+                    Err(e)
+                }
+            };
+            let _ = tx.send(result);
         });
+    }
+
+    /// Poll the background encoder for a finished save and start the
+    /// transient status message. Also schedules the repaint that lets the
+    /// message clear itself when it expires. Called once per frame.
+    pub(crate) fn check_save_status(&mut self, ctx: &egui::Context) {
+        if let Some(receiver) = self.save_status_receiver.take() {
+            if let Ok(result) = receiver.try_recv() {
+                let (message, is_error) = match result {
+                    Ok(name) => (format!("Saved {}", name), false),
+                    Err(e) => (format!("Save failed: {}", e), true),
+                };
+                self.save_status = Some(SaveStatus {
+                    message,
+                    is_error,
+                    expires: Instant::now() + SAVE_STATUS_DURATION,
+                });
+                ctx.request_repaint();
+            } else {
+                // Still encoding; put the receiver back for next frame.
+                self.save_status_receiver = Some(receiver);
+            }
+        }
+
+        if let Some(status) = &self.save_status {
+            let remaining = status.expires.saturating_duration_since(Instant::now());
+            if remaining == Duration::ZERO {
+                self.save_status = None;
+            } else {
+                ctx.request_repaint_after(remaining);
+            }
+        }
     }
 }
 

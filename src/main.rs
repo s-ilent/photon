@@ -170,6 +170,7 @@ impl eframe::App for app::PhotonApp {
         // Check for completed background loads
         self.check_load_complete(ctx);
         self.check_dir_load_complete();
+        self.check_save_status(ctx);
 
         // 1. Top Toolbar (App State & Settings)
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -250,6 +251,22 @@ impl eframe::App for app::PhotonApp {
                     ui.separator();
                 }
                 ui.label(format!("Zoom: {:.0}%", self.zoom * 100.0));
+
+                if let Some(status) = &self.save_status {
+                    if std::time::Instant::now() < status.expires {
+                        ui.separator();
+                        let color = if status.is_error {
+                            egui::Color32::from_rgb(255, 85, 85)
+                        } else {
+                            egui::Color32::from_rgb(80, 250, 123)
+                        };
+                        ui.label(
+                            egui::RichText::new(&status.message)
+                                .strong()
+                                .color(color),
+                        );
+                    }
+                }
 
                 if self.mode == app::MouseMode::Select {
                     if let Some(sel) = &self.selection_image_rect {
