@@ -10,43 +10,18 @@ list it here and address it deliberately.
 
 What's next, in the order I'd do it:
 
-1. **Wire up `use_sharp_scaling`** — the Settings checkbox and config field
-   exist but nothing reads them (dead since introduction). Fix: register the
-   active texture twice (linear + nearest samplers) and pick the id by the
-   setting. Small, user-visible.
-2. **Folder-scroll intermediate fix** — while an image loads, any completed
-   preload is shown dimmed as a "progressive intermediate", which can be the
-   *neighbor's* pixels for the wrong file. Either suppress the intermediate
-   when its path isn't the target, or pin the active texture against
-   eviction. Small.
-3. **Plan.md input parity: drag-and-drop + fullscreen** — Plan.md specifies
-   opening a folder via drag-and-drop (egui exposes `input.raw.dropped_files`)
-   and `Enter` → fullscreen (`ctx.send_viewport_cmd(ViewportCommand::Fullscreen(..))`).
-   Small-medium.
-4. **Folder watching** — refresh the open directory when files change, via
-   `notify-debouncer-full` (Sophia-vetted; re-exports `notify`). Medium.
-5. **Shader pass milestone 1** — PaintCallback parity spike (see milestones
+1. **Shader pass milestone 1** — PaintCallback parity spike (see milestones
    below). The long arc that unblocks ~5 other items.
-6. **Imagine-style texture sidebar** — after the shader work decides how mips
+2. **Imagine-style texture sidebar** — after the shader work decides how mips
    get decoded/uploaded.
+3. **Batch converter** — `rayon` `par_iter` convert/save with a real
+   "Convert…" dialog. Independent of the shader work; can slot in anytime.
+4. **Property map mode** — when a spec exists.
 
 ---
 
 ## Features & behavior gaps
 
-- [ ] **Wire up `use_sharp_scaling`** (dead setting, found 2026-10-11) —
-      the canvas always samples linear. Register both samplers at upload and
-      choose per setting (live, or on next texture registration).
-- [ ] **Folder-scroll intermediate** — suppress the dimmed preload display
-      when its path isn't the active target, or introduce a pinned active
-      slot the LRU eviction can't touch. (Todo from the loader pass; behavior
-      described in `check_load_complete`'s `else if is_loading` branch.)
-- [ ] **Drag-and-drop open** — drop a file/folder onto the window to open it
-      (`egui::Event::DroppedFile`). Plan.md parity.
-- [ ] **Fullscreen toggle** — Enter key per Plan.md's control spec.
-- [ ] **Folder watching** — notify-debouncer-full on the open directory;
-      refresh `images` (keep current index by path), surface changes without
-      disrupting the displayed image.
 - [ ] **Imagine-style texture sidebar** — mip levels, texture-array entries,
       and cubemap faces in one tree (user request, modeled on the Imagine
       viewer). Supersedes the bottom-bar face buttons. Needs a mip-decode
@@ -57,6 +32,10 @@ What's next, in the order I'd do it:
       a real "Convert…" dialog. Depends on nothing; medium-large.
 - [ ] **ICC / color profiles** (Plan.md) — read ICC and apply in the shader
       pass; deferred with it.
+- [ ] **Watcher niceties** (post-MVP folder watching, shipped 2026-10-11) —
+      handle the watched directory itself being deleted/renamed (currently
+      the watcher just stops producing useful listings); consider a
+      directory-picker affordance for when the open folder empties.
 
 ## Shader pass milestones (the long arc)
 
@@ -127,6 +106,17 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-11 (quick-wins pass)
+- `use_sharp_scaling` wired (was dead since introduction): every layer
+  registered with linear + nearest samplers, live toggle in Settings.
+- Neighbor-pixel intermediate display removed: while loading, the previous
+  image stays under the spinner until the target arrives.
+- Drag-and-drop open (files and folders, via `open_path`) and Enter →
+  fullscreen toggle (Plan.md input parity).
+- Folder watching via `notify-debouncer-full`: debounced re-walk on changes;
+  the displayed image stays selected and is not reloaded unless its mtime
+  changed on disk; vanished files land on the nearest entry.
 
 ### 2026-10-11 (follow-up passes)
 - Ctrl+C/V shortcuts fixed (egui-winit rewrites them into

@@ -100,14 +100,15 @@ src/
 There are two background threads plus the main (render) thread, connected by `std::sync::mpsc` channels:
 
 1. **Directory walker thread** (`load_directory` in `app/loader.rs`): spawned when a folder is opened, builds a `Vec<PathBuf>` via `DirWalker`, sorts it, sends the result back on a channel. The main thread polls it in `check_dir_load_complete` each frame.
-2. **Image loader worker thread** (`init_worker` in `app/loader.rs`): long-lived thread that owns a clone of the wgpu `Device`/`Queue`. It receives `WorkerMessage`s on a channel, maintains a `VecDeque` of pending requests, drops stale `Active` requests that don't match the current target id, and prioritizes `Active`/`Paste` over `Preload`. It rejects images exceeding the GPU's max texture dimension (or zero-extent) with `LoadResult::Failed`, otherwise decodes the image, `device.create_texture`s it as `Rgba8Unorm`, `queue.write_texture`s the RGBA bytes, and sends back a `LoadResult::Loaded` (view + dims + decoded bytes for Active/Paste) on a `sync_channel(5)` (bounded so it backpressures the worker).
-3. **Main render thread** (`check_load_complete` in `app/loader.rs`): each frame drains the result channel, registers the `TextureView` with egui's `wgpu` renderer, evicts from the LRU texture cache (capacity 24) freeing GPU textures, and updates the displayed image if this was the active target. Failed loads for the active target set `error_overlay`. `check_dir_load_complete` and `check_save_status` poll the directory walker and save-encoder channels the same way.
+2. **Directory watcher thread** (also `load_directory`): a `notify-debouncer-full` watcher (non-recursive, 500ms debounce) that re-walks the directory on changes and sends fresh listings on its own channel (`check_dir_watch` → `apply_dir_refresh`). Refreshes preserve the user's place: the displayed image stays selected by path and is **not reloaded unless its mtime changed on disk** (then the stale cache entry is freed and re-requested). A replaced watcher stops the old thread via a dropped stop-sender; refreshes are skipped while the initial walk is in flight and ignored when the listing is unchanged.
+3. **Image loader worker thread** (`init_worker` in `app/loader.rs`): long-lived thread that owns a clone of the wgpu `Device`/`Queue`. It receives `WorkerMessage`s on a channel, maintains a `VecDeque` of pending requests, drops stale `Active` requests that don't match the current target id, and prioritizes `Active`/`Paste` over `Preload`. It rejects images exceeding the GPU's max texture dimension (or zero-extent) with `LoadResult::Failed`, otherwise decodes the image, uploads **every layer** as its own `Rgba8Unorm` texture (each registered with linear AND nearest samplers), and sends back a `LoadResult::Loaded` on a `sync_channel(5)`. Non-target results are cached but never displayed (no neighbor-pixel intermediates).
+4. **Main render thread** (`check_load_complete` in `app/loader.rs`): each frame drains the result channel, registers the `TextureView`s with egui's `wgpu` renderer, evicts from the LRU texture cache (capacity 24) freeing GPU textures, and updates the displayed image if this was the active target. Failed loads for the active target set `error_overlay`. `check_dir_load_complete`, `check_dir_watch`, and `check_save_status` poll their channels the same way.
 
 `request_current` always issues an `Active` load for the current index and `Preload` loads for `images[current±1]`, skipping anything already in the texture cache. The `latest_req_id` atomic counter lets the worker discard superseded `Active` requests when the user navigates quickly. `PhotonApp::active_rgba` keeps the active image's decoded bytes so copy/save don't re-decode from disk; it is cleared whenever the target changes and on cache-hit loads (which never pass through the worker — `current_rgba` falls back to a re-decode then).
 
 Zoom/pan reset on image switch per the configured `ZoomReset` setting (`always` / `dimension_change` / `never`, default `dimension_change`) — see the tests in `app/loader.rs`. All settings persist to `config.ron` (serde + RON, `#[serde(default)]` so partial files load; directory from the `directories` crate, overridable with `PHOTON_CONFIG_DIR`). Settings are rewritten only when they actually change, so hand edits survive while nothing is touched.
 
-All concurrency is raw `std::thread` + `mpsc`; the previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font).
+All concurrency is raw `std::thread` + `mpsc`; the previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching).
 
 ### GPU/textures
 
@@ -115,7 +116,7 @@ The app stores wgpu state from eframe's `CreationContext` (`device`, `queue` wra
 
 ### Mouse modes and input
 
-- **Browse** (default): scroll wheel zooms (log-scale, clamped 0.1–50, around the cursor); left/middle drag pans.
+- **Browse** (default): scroll wheel zooms (log-scale, clamped 0.1–50, around the cursor); left/middle drag pans. Files/folders can be drag-and-dropped onto the window to open them (`open_path`, shared with the Open dialog).
 - **Navigate**: scroll wheel navigates next/prev (with a 30-unit accumulator threshold); middle drag pans.
 - **Select**: left-drag draws a box in screen space, converted to image space via the current scale/pan; the box is used by `copy_to_clipboard` to crop the copied image.
 
@@ -138,6 +139,7 @@ Defined in `src/main.rs` via `egui::KeyboardShortcut` and `Modifiers::COMMAND` (
 | Next image | `Space` / `Right Arrow` |
 | Previous image | `Backspace` / `Left Arrow` |
 | Cycle mouse mode | `Tab` / `Backslash` |
+| Toggle fullscreen | `Enter` |
 
 GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/`Paste`/`Cut` at the input layer — the key events never exist on winit platforms. Copy/paste are therefore dispatched from those command events (plus key-shortcut fallbacks) in `take_shortcut_actions` (`src/main.rs`), which has synthetic-input tests. If a TextEdit is ever added, it will not see Ctrl+C/V — handle it there deliberately.
 
@@ -145,14 +147,14 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **twenty-one unit tests** across six files, all pure-CPU:
+The suite is **twenty-six unit tests** across six files, all pure-CPU:
 
 - `main.rs` — shortcut dispatch (`take_shortcut_actions`): clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode shortcuts, no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
 - `dir_walker.rs` — `test_is_supported_image` (extension recognition).
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test.
 - `app/clipboard.rs` — three `crop_rgba` tests (empty rect, single pixel, clamping) and a `current_rgba` test for following the displayed layer.
 - `app/saver.rs` — PNG and JPEG encoders write decodable files (JPEG drops alpha).
-- `app/loader.rs` — zoom-reset semantics (`ZoomReset::DimensionChange`/`Never`/`Always`) on cached loads, exercised through `request_current` without a GPU.
+- `app/loader.rs` — zoom-reset semantics (`ZoomReset::DimensionChange`/`Never`/`Always`), sharp-scaling sampler pick, and directory-refresh semantics (place preserved without reload / reload on mtime change / landing when the current file vanishes) on cached loads, exercised through `request_current`/`apply_dir_refresh` without a GPU.
 - `app/config.rs` — RON config: empty file → defaults, roundtrip, partial file fills defaults, malformed file → defaults.
 
 There are no integration tests and no test harness for the actual GPU/worker upload path (which needs a live wgpu device). When adding behavior to pure, side-effect-free functions (path filtering, crop math, encoder wrappers, cache-hit state transitions, config parsing), add `#[cfg(test)]` unit tests next to the code, matching the existing pattern. Do not attempt to unit-test code that requires a live wgpu device or an egui context.
