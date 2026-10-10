@@ -90,6 +90,32 @@ pub(crate) fn current_rgba(app: &PhotonApp) -> Option<(Vec<u8>, u32, u32)> {
 
 impl PhotonApp {
     pub(crate) fn copy_to_clipboard(&self) {
+        // While the error overlay is up there is no image to copy; Ctrl+C
+        // copies the error message text instead (it's what's on screen).
+        if let Some(overlay) = &self.error_overlay {
+            let message = match overlay {
+                crate::app::StatusOverlay::Error(msg) => msg.clone(),
+                crate::app::StatusOverlay::UnsupportedFormat(name) => {
+                    format!("Unsupported format: {name}")
+                }
+                crate::app::StatusOverlay::Loading(msg) => msg.clone(),
+                crate::app::StatusOverlay::NoImages => "No images loaded.".to_string(),
+            };
+            std::thread::spawn(move || {
+                let mut clipboard = match Clipboard::new() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::error!("Clipboard error: {}", e);
+                        return;
+                    }
+                };
+                if let Err(e) = clipboard.set_text(message) {
+                    log::error!("Failed to set clipboard text: {}", e);
+                }
+            });
+            return;
+        }
+
         let (rgba, width, height) = match current_rgba(self) {
             Some(v) => v,
             None => return,
