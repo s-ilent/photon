@@ -71,11 +71,12 @@ All source lives under `src/`. The binary entry point is `src/main.rs`.
 ```
 src/
 ├── main.rs              # Entry point. eframe::App impl (App::ui), input/shortcut handling, top/bottom panels, sidebar.
-├── app.rs               # PhotonApp state struct + shared types (Priority, WorkerMessage, LoadResult, StatusOverlay, SaveStatus, MouseMode, SortMode, ZoomReset, AppSettings, CachedTextures). Module root for the app/ submodule.
+├── app.rs               # PhotonApp state struct + shared types (Priority, WorkerMessage, LoadResult, StatusOverlay, SaveStatus, MouseMode, SortMode, ZoomReset, AppSettings). Module root for the app/ submodule.
 ├── dir_walker.rs        # DirWalker: fast non-recursive (max_depth=1, non-hidden) scan of supported image files.
 ├── image_loader.rs      # load_image(): DDS via image_dds, everything else via the image crate; returns DecodedImage (one RGBA8 buffer per layer).
+├── render.rs            # Image canvas render pass: WGSL pipeline, tile chunking, DrawImageCallback (see "GPU / render pipeline").
 └── app/
-    ├── loader.rs        # Worker thread + GPU texture upload, LRU texture cache, speculative neighbor preload, directory load, sorting.
+    ├── loader.rs        # Worker thread (decode + GPU tile upload), LRU texture cache, speculative neighbor preload, directory load + watcher, sorting.
     ├── canvas.rs        # Image workspace: zoom/pan/selection drawing, checkerboard background, input handling per mouse mode, status overlays.
     ├── clipboard.rs     # Copy (with optional crop from selection) and paste via arboard; current_rgba() source of truth for displayed bytes.
     ├── config.rs        # Settings persistence: config.ron via serde + RON, config dir via the directories crate.
@@ -110,9 +111,13 @@ Zoom/pan reset on image switch per the configured `ZoomReset` setting (`always` 
 
 All concurrency is raw `std::thread` + `mpsc`; the previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching).
 
-### GPU/textures
+### GPU / render pipeline
 
-The app stores wgpu state from eframe's `CreationContext` (`device`, `queue` wrapped in `Arc`, and the full `RenderState`). The device requests `max_texture_dimension_2d` of 16384, clamped to what the adapter supports (the `WgpuSetupCreateNew::device_descriptor` callback in `main.rs`); the worker's oversized guard reads the live limit, so the effective ceiling adapts per hardware. Uploaded image textures are `wgpu::TextureFormat::Rgba8Unorm` with `TEXTURE_BINDING | COPY_DST` usage, always registered with the **linear** sampler — sharp/pixelated scaling is a shader-pass feature, not a sampler switch (`use_sharp_scaling` is a persisted placeholder until then). Textures are registered with egui's renderer via `renderer.register_native_texture(...)` and displayed through `painter.image(...)`. GPU texture lifecycle is managed manually through `renderer.free_texture(...)` on cache eviction and directory reload — leaks are a real concern here, so be careful when touching the cache or load paths.
+The image canvas draws through a **custom wgpu render pass** (`src/render.rs` + `src/render/image.wgsl`), not egui's `painter.image`: a WGSL pipeline built at startup against the surface's format (`RenderState::target_format`), registered in `renderer.callback_resources`, drawing the displayed image's **tiles** with a per-frame uniform (viewport transform, tint, sharp-sampling flag). The **loader worker** builds the GPU-resident `RenderImage` (per-layer tiles with bind groups and vertex quads) using the same bind group layouts cloned from `PhotonApp::image_renderer` — bind groups must be created from the *same layout objects* the pipeline uses. Images larger than the GPU's `max_texture_dimension_2d` are chunked (`render::chunk_grid`) and reassembled in image space; only zero-extent images fail to load.
+
+The device requests `max_texture_dimension_2d` of 16384, clamped to what the adapter supports (the `WgpuSetupCreateNew::device_descriptor` callback in `main.rs`). Textures are `wgpu::TextureFormat::Rgba8Unorm` (CPU-decoded RGBA8; native-format upload is a future milestone). Sharp (pixel) sampling is a shader decision — nearest when `use_sharp_scaling` and magnified, linear otherwise; samplers are both bound and the fragment shader picks.
+
+GPU lifetime is **wgpu refcounting**: the cache and `PhotonApp::displayed_image` hold `Arc<RenderImage>`, and dropping the last reference (including in-flight frames, which wgpu tracks) frees the resources. There is no manual `free_texture` bookkeeping — do not reintroduce it. egui's `TextureId` registration is no longer used for the image canvas.
 
 ### Mouse modes and input
 
@@ -147,9 +152,10 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **twenty-six unit tests** across six files, all pure-CPU:
+The suite is **twenty-nine unit tests** across seven files, all pure-CPU:
 
-- `main.rs` — shortcut dispatch (`take_shortcut_actions`): clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode shortcuts, no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
+- `main.rs` — shortcut dispatch (`take_shortcut_actions`): clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
+- `render.rs` — tile `chunk_grid` math (single tile, split grids, exact multiples) and the uniform struct's WGSL-compatible layout.
 - `dir_walker.rs` — `test_is_supported_image` (extension recognition).
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test.
 - `app/clipboard.rs` — three `crop_rgba` tests (empty rect, single pixel, clamping) and a `current_rgba` test for following the displayed layer.
@@ -203,7 +209,7 @@ Many extra files in the repo are **ignored by git** (see `.gitignore`) and are A
 
 - Photon is a local-only desktop application. It reads files from disk the user selects via `rfd` dialogs or passes as a CLI argument; it does not perform network access beyond what the GUI/graphics stack and the OS clipboard require.
 - Clipboard operations (`arboard` with the `wayland-data-control` feature) copy/paste raw image bytes. Copy, save-as, and save-selection resolve bytes through `current_rgba` (`app/clipboard.rs`), which prefers the loader's already-decoded `active_rgba`/`pasted_rgba` and only re-reads from disk as a fallback — keep it that way rather than re-decoding.
-- The worker thread holds `Arc` clones of the wgpu `Queue`; the GPU texture objects are reference-counted by egui's renderer and must be explicitly freed via `renderer.free_texture`. Texture leaks are the main resource-safety concern — be careful when modifying the LRU eviction path in `check_load_complete` or `load_directory`.
+- The worker thread holds `Arc` clones of the wgpu `Device`/`Queue`. GPU resources are wgpu-refcounted (`Arc<RenderImage>` in the cache / display state), so dropping the last reference frees them — there is no manual free bookkeeping. Keep it that way: reintroducing manual `free_texture`-style lifecycle on top of Arc sharing is how double-frees happen.
 - There is no untrusted-input parsing of exotic file formats beyond what the `image` crate itself handles; treat format-decoding bugs as upstream concerns.
 
 ---

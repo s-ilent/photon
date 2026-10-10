@@ -10,22 +10,24 @@ list it here and address it deliberately.
 
 What's next, in the order I'd do it:
 
-1. **Shader pass milestone 1** — PaintCallback parity spike (see milestones
-   below). The long arc that unblocks ~5 other items.
-2. **Imagine-style texture sidebar** — after the shader work decides how mips
-   get decoded/uploaded.
-3. **Batch converter** — `rayon` `par_iter` convert/save with a real
+1. **Shader pass M3: native BCn upload** — compressed DDS bytes straight to
+   VRAM (no CPU decode), per-format pipeline variants. The pass machinery
+   (M1/M2) landed 2026-10-11; this is the next chunk of the arc.
+2. **Batch converter** — `rayon` `par_iter` convert/save with a real
    "Convert…" dialog. Independent of the shader work; can slot in anytime.
+3. **Imagine-style texture sidebar** — DEFERRED: the user is designing this.
+   Implement only against their design when it's ready.
 4. **Property map mode** — when a spec exists.
 
 ---
 
 ## Features & behavior gaps
 
-- [ ] **Imagine-style texture sidebar** — mip levels, texture-array entries,
-      and cubemap faces in one tree (user request, modeled on the Imagine
-      viewer). Supersedes the bottom-bar face buttons. Needs a mip-decode
-      decision: the pipeline decodes/uploads mip 0 only
+- [ ] **Imagine-style texture sidebar** — DEFERRED by the user (2026-10-11):
+      they are designing it; implement only against that design. Covers mip
+      levels, texture-array entries, and cubemap faces in one tree,
+      superseding the bottom-bar face buttons. Needs a mip-decode decision:
+      the pipeline decodes/uploads mip 0 only
       (`decode_layers_mipmaps_dds(.., 0..1)`), so a mip selector needs either
       per-mip decode on demand or the full chain at load.
 - [ ] **Batch converter** (Plan.md) — `rayon` `par_iter` convert/save; fonts
@@ -41,11 +43,10 @@ What's next, in the order I'd do it:
       source: `DroppedFile` is emitted from the X11 event processor only).
       Blocked on winit; revisit on winit upgrades. The `open_path` plumbing
       is done and platform-agnostic.
-- [ ] **Tiled/chunked viewing of very large images** — the GPU limit is now
-      requested at 16384 (clamped per adapter), but e.g. 2048×12288-class
-      stacked textures or 32k panoramas still exceed it. True tiling
-      (virtual texturing or oversized-texture re-upload) belongs to the
-      shader pass; the oversized guard error remains the fallback.
+- [x] **Tiled/chunked viewing of very large images** — SHIPPED with the
+      shader pass (2026-10-11): oversized images are chunked at the GPU's
+      max texture dimension and reassembled in image space; the oversized
+      rejection is gone. Remaining limit is RAM for the CPU-side decode.
 - [ ] **Key configuration** — user-configurable shortcut map (config.ron);
       F11 fullscreen and all others become remappable then.
 
@@ -56,22 +57,26 @@ the GPU via `egui_wgpu::CallbackTrait` (feasibility reviewed 2026-10-11 —
 viable and architecturally clean). Unblocks: correct sharp scaling, gamma,
 HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
 
-- [ ] **M1: parity spike** — render the active RGBA8 texture through a
-      PaintCallback with identical visuals. Decides the color-space question
-      (Unorm vs UnormSrgb target) against real output.
-- [ ] **M2: sampling + gamma** — sharp/pixelated scaling implemented in the
-      shader (samplers stay linear per design — the sampler-based approach
-      was reverted 2026-10-11), explicit gamma handling in the shader.
+- [x] **M1 + M2 + chunked viewing** (2026-10-11) — the image canvas renders
+      through a custom WGSL pipeline (`src/render.rs`): per-frame uniform
+      (viewport transform, tint, sharp flag), tiles drawn per layer, and
+      oversized images chunked at the GPU limit and reassembled in image
+      space. Sharp (pixel) sampling works as designed — nearest in the
+      shader when magnified, linear otherwise. GPU lifetime is wgpu
+      refcounting (`Arc<RenderImage>`); all manual free bookkeeping is gone.
+      Color space: RGBA8 passes through untouched (sRGB-encoded, matching
+      egui).
 - [ ] **M3: native BCn upload** — BC1–BC7 DDS bytes straight to VRAM (no CPU
-      decode); per-format pipeline cache. Fallback to CPU decode stays.
+      decode); per-format pipeline variants (sRGB/blocky sample types), tile
+      reuse across faces. Fallback to CPU decode stays for exotic formats.
 - [ ] **M4: HDR + tonemap** — `Rgba32Float` (needs `float32_filterable` or
       nearest sampling), EXR and BC6H float paths, exposure/gamma tonemap.
       BC6H currently uses the RGBA8 path; revisit `imagef32_from_dds`.
 - [ ] **M5: cubemap view** — true pan-around-the-sphere navigation (decided
       2026-10-11: face buttons now, 3D view here).
 - [ ] **Normal-map preview mode** — reconstruct `B = sqrt(1 - R² - G²)` and/or
-      single-channel views; trivial once M2 exists. (Sample:
-      `mountainslab02_n.dds`.)
+      single-channel views; trivial now that the image goes through our own
+      shader. (Sample: `mountainslab02_n.dds`.)
 
 ## Deferred / needs a spec
 
@@ -119,6 +124,16 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-11 (shader pass)
+- Image canvas renders through a custom wgpu pipeline (WGSL, M1/M2):
+  shader-based sharp scaling (nearest when magnified, per `use_sharp_scaling`),
+  per-frame uniform viewport/tint transform.
+- Chunked viewing: oversized images split at the GPU's max texture dimension
+  and reassembled in image space; the oversized-image rejection is gone.
+- Texture lifecycle simplified to wgpu refcounting (`Arc<RenderImage>`);
+  manual free bookkeeping deleted. Ctrl+C copies the error message text
+  while the error overlay is up.
 
 ### 2026-10-11 (review-fix pass)
 - Sampler-based sharp scaling reverted (samplers stay linear; the feature is
