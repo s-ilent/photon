@@ -112,11 +112,11 @@ All concurrency is raw `std::thread` + `mpsc`; the previously-listed unused depe
 
 ### GPU/textures
 
-The app stores wgpu state from eframe's `CreationContext` (`device`, `queue` wrapped in `Arc`, and the full `RenderState`). Uploaded image textures are `wgpu::TextureFormat::Rgba8Unorm` with `TEXTURE_BINDING | COPY_DST` usage. The texture is registered with egui's renderer via `renderer.register_native_texture(..., FilterMode::Linear)` and displayed through `painter.image(...)`. GPU texture lifecycle is managed manually through `renderer.free_texture(...)` on cache eviction and directory reload — leaks are a real concern here, so be careful when touching the cache or load paths.
+The app stores wgpu state from eframe's `CreationContext` (`device`, `queue` wrapped in `Arc`, and the full `RenderState`). The device requests `max_texture_dimension_2d` of 16384, clamped to what the adapter supports (the `WgpuSetupCreateNew::device_descriptor` callback in `main.rs`); the worker's oversized guard reads the live limit, so the effective ceiling adapts per hardware. Uploaded image textures are `wgpu::TextureFormat::Rgba8Unorm` with `TEXTURE_BINDING | COPY_DST` usage, always registered with the **linear** sampler — sharp/pixelated scaling is a shader-pass feature, not a sampler switch (`use_sharp_scaling` is a persisted placeholder until then). Textures are registered with egui's renderer via `renderer.register_native_texture(...)` and displayed through `painter.image(...)`. GPU texture lifecycle is managed manually through `renderer.free_texture(...)` on cache eviction and directory reload — leaks are a real concern here, so be careful when touching the cache or load paths.
 
 ### Mouse modes and input
 
-- **Browse** (default): scroll wheel zooms (log-scale, clamped 0.1–50, around the cursor); left/middle drag pans. Files/folders can be drag-and-dropped onto the window to open them (`open_path`, shared with the Open dialog).
+- **Browse** (default): scroll wheel zooms (log-scale, clamped 0.1–50, around the cursor); left/middle drag pans. Files/folders can be drag-and-dropped onto the window to open them (`open_path`, shared with the Open dialog) — **X11 and Windows/macOS only**: winit's Wayland backend has no file drop support, so on Wayland the drop is a no-op.
 - **Navigate**: scroll wheel navigates next/prev (with a 30-unit accumulator threshold); middle drag pans.
 - **Select**: left-drag draws a box in screen space, converted to image space via the current scale/pan; the box is used by `copy_to_clipboard` to crop the copied image.
 
@@ -139,7 +139,7 @@ Defined in `src/main.rs` via `egui::KeyboardShortcut` and `Modifiers::COMMAND` (
 | Next image | `Space` / `Right Arrow` |
 | Previous image | `Backspace` / `Left Arrow` |
 | Cycle mouse mode | `Tab` / `Backslash` |
-| Toggle fullscreen | `Enter` |
+| Toggle fullscreen | `F11` |
 
 GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/`Paste`/`Cut` at the input layer — the key events never exist on winit platforms. Copy/paste are therefore dispatched from those command events (plus key-shortcut fallbacks) in `take_shortcut_actions` (`src/main.rs`), which has synthetic-input tests. If a TextEdit is ever added, it will not see Ctrl+C/V — handle it there deliberately.
 
@@ -172,6 +172,7 @@ Run tests with `cargo test --release` (debug builds are slow to compile and run 
   - Functionality for `PhotonApp` is split across `impl PhotonApp` blocks in the `app/*.rs` files by concern, not in one big file.
 - Error handling: the application uses **string errors** (`Result<_, String>` in `image_loader::load_image` and the saver) and `println!` for background-thread diagnostics rather than `anyhow`/`thiserror`. Match the surrounding pattern; do not introduce a new error type unless the task requires it.
 - Diagnostics go through the **`log` facade + `env_logger`** (default filter `photon=info,warn` so dependency crates like zbus/wgpu stay quiet; `RUST_LOG` overrides). Use `log::debug!`/`info!`/`warn!`/`error!` — no raw `println!` diagnostics.
+- **No selectable text**: the theme sets `style.interaction.selectable_labels = false` (both dark and light). Photon is a viewer; egui's selectable-label cursor caused offset selection rectangles and scroll-jumps. If a TextEdit is ever added, re-enable selectability locally.
 - eframe/egui 0.34 APIs are used (e.g. the unified `egui::Panel::top/bottom/left` with `show_inside` from `App::ui`, `ComboBox::from_id_salt`, `TexelCopyTextureInfo`/`TexelCopyBufferLayout`, `StrokeKind::Outside`, `TextWrapMode::Extend`). The wgpu version is 29. Match these API versions exactly; do not pull in newer or older wgpu APIs.
 - When editing existing code, follow `CLAUDE.md` (in the repo root): surface assumptions, prefer the minimum change that solves the problem, touch only what the task requires, match surrounding style, and do not delete pre-existing dead code — mention it instead. (The `CLAUDE.md` file also contains a strict instruction: never suggest "let's go with a simpler approach"; if stuck, ask for clarification.)
 

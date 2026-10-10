@@ -36,6 +36,18 @@ What's next, in the order I'd do it:
       handle the watched directory itself being deleted/renamed (currently
       the watcher just stops producing useful listings); consider a
       directory-picker affordance for when the open folder empties.
+- [ ] **Drag-and-drop on Wayland** — works on X11/Windows/macOS but winit
+      0.30's Wayland backend has no file-drop support (verified in winit
+      source: `DroppedFile` is emitted from the X11 event processor only).
+      Blocked on winit; revisit on winit upgrades. The `open_path` plumbing
+      is done and platform-agnostic.
+- [ ] **Tiled/chunked viewing of very large images** — the GPU limit is now
+      requested at 16384 (clamped per adapter), but e.g. 2048×12288-class
+      stacked textures or 32k panoramas still exceed it. True tiling
+      (virtual texturing or oversized-texture re-upload) belongs to the
+      shader pass; the oversized guard error remains the fallback.
+- [ ] **Key configuration** — user-configurable shortcut map (config.ron);
+      F11 fullscreen and all others become remappable then.
 
 ## Shader pass milestones (the long arc)
 
@@ -47,8 +59,9 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
 - [ ] **M1: parity spike** — render the active RGBA8 texture through a
       PaintCallback with identical visuals. Decides the color-space question
       (Unorm vs UnormSrgb target) against real output.
-- [ ] **M2: sampling + gamma** — nearest/linear per `use_sharp_scaling`,
-      explicit gamma handling in the shader.
+- [ ] **M2: sampling + gamma** — sharp/pixelated scaling implemented in the
+      shader (samplers stay linear per design — the sampler-based approach
+      was reverted 2026-10-11), explicit gamma handling in the shader.
 - [ ] **M3: native BCn upload** — BC1–BC7 DDS bytes straight to VRAM (no CPU
       decode); per-format pipeline cache. Fallback to CPU decode stays.
 - [ ] **M4: HDR + tonemap** — `Rgba32Float` (needs `float32_filterable` or
@@ -106,6 +119,16 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-11 (review-fix pass)
+- Sampler-based sharp scaling reverted (samplers stay linear; the feature is
+  shader-pass work — the dual-sampler approach wasn't the design).
+- Fullscreen on F11 instead of Enter.
+- Global no-selectable-text rule (fixes offset selection cursor on overlay
+  text and the sidebar jump on modifier presses — same root cause).
+- Copy / save-selection / save-as no-op while the error overlay is up.
+- GPU texture limit raised to 16384 (clamped per adapter); tiling of truly
+  oversized images remains a shader-pass item.
 
 ### 2026-10-11 (quick-wins pass)
 - `use_sharp_scaling` wired (was dead since introduction): every layer
