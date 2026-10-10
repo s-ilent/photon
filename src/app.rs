@@ -227,6 +227,14 @@ pub struct PhotonApp {
     pub(crate) is_pasted: bool,
     pub(crate) needs_fit: bool,
     pub(crate) dir_load_receiver: Option<Receiver<Vec<PathBuf>>>,
+    /// Watcher-produced refreshed listings for the open directory.
+    pub(crate) dir_watch_receiver: Option<Receiver<Vec<PathBuf>>>,
+    /// Dropping this sender stops the directory watcher thread. Replaced on
+    /// every `load_directory` so only the newest directory is watched.
+    pub(crate) dir_watch_stop: Option<Sender<()>>,
+    /// Last-seen modification time of the displayed image, used by the
+    /// directory watcher to decide whether the file actually changed on disk.
+    pub(crate) current_mtime: Option<std::time::SystemTime>,
     /// Texture id of every layer of the displayed image, in file order
     /// (cubemap faces in DirectX order for cubemaps). Single-layer images
     /// have exactly one entry; `image_texture_id` is the displayed one.
@@ -290,6 +298,9 @@ impl PhotonApp {
             is_pasted: false,
             needs_fit: false,
             dir_load_receiver: None,
+            dir_watch_receiver: None,
+            dir_watch_stop: None,
+            current_mtime: None,
             layer_texture_ids: Vec::new(),
             layer_texture_ids_nearest: Vec::new(),
             current_layer: 0,

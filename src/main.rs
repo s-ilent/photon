@@ -156,6 +156,7 @@ impl eframe::App for app::PhotonApp {
         // Check for completed background loads
         self.check_load_complete(&ctx);
         self.check_dir_load_complete();
+        self.check_dir_watch();
         self.check_save_status(&ctx);
 
         // Persist settings when they changed this frame

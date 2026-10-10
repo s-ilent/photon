@@ -313,6 +313,13 @@ impl PhotonApp {
             self.load_image(path, Priority::Active);
         }
 
+        // Stamp the displayed file's mtime for the directory watcher's
+        // changed-on-disk check.
+        self.current_mtime = self
+            .target_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+
         self.scroll_to_target = true;
 
         // 2. Preload neighbors
@@ -562,6 +569,61 @@ impl PhotonApp {
             files.sort();
             let _ = tx.send(files);
         });
+
+        // Watch the directory: re-walk on debounced changes and send fresh
+        // listings. Dropping `dir_watch_stop` (replaced here) stops any
+        // previous watcher thread; the Debouncer lives in the thread, so its
+        // drop unregisters the watch on exit.
+        let (watch_tx, watch_rx) = channel();
+        let (stop_tx, stop_rx) = channel::<()>();
+        self.dir_watch_stop = Some(stop_tx);
+        self.dir_watch_receiver = Some(watch_rx);
+
+        let watch_dir = path.to_path_buf();
+        std::thread::spawn(move || {
+            let (event_tx, event_rx) = channel();
+            let mut debouncer = match notify_debouncer_full::new_debouncer(
+                std::time::Duration::from_millis(500),
+                None,
+                move |result| {
+                    let _ = event_tx.send(result);
+                },
+            ) {
+                Ok(d) => d,
+                Err(e) => {
+                    log::warn!("Failed to create watcher for {:?}: {}", watch_dir, e);
+                    return;
+                }
+            };
+            if let Err(e) = debouncer
+                .watch(&watch_dir, notify_debouncer_full::notify::RecursiveMode::NonRecursive)
+            {
+                log::warn!("Failed to watch {:?}: {}", watch_dir, e);
+                return;
+            }
+
+            loop {
+                match stop_rx.try_recv() {
+                    Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                }
+                match event_rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                    Ok(Ok(_events)) => {
+                        let files = dir_walker::DirWalker::new(&watch_dir)
+                            .map(|w| w.files)
+                            .unwrap_or_default();
+                        if watch_tx.send(files).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Err(errors)) => {
+                        log::warn!("Watch errors on {:?}: {:?}", watch_dir, errors)
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
     }
 
     pub(crate) fn check_dir_load_complete(&mut self) {
@@ -592,8 +654,86 @@ impl PhotonApp {
         }
     }
 
-    pub(crate) fn sort_images(&mut self, mode: SortMode) {
-        if self.images.is_empty() {
+    /// Poll the directory watcher for a refreshed listing and apply it.
+    /// Skipped while the initial directory walk is still in flight so its
+    /// result can't be processed against a stale image list.
+    pub(crate) fn check_dir_watch(&mut self) {
+        if self.is_loading_dir {
+            return;
+        }
+        let new_files = match self
+            .dir_watch_receiver
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            Some(files) => files,
+            None => return,
+        };
+        self.apply_dir_refresh(new_files);
+    }
+
+    /// Apply a watcher-produced directory listing while preserving the user's
+    /// place: the displayed image stays selected (tracked by path through the
+    /// re-sort) and is NOT reloaded unless its file actually changed on disk
+    /// (mtime moved since it was displayed). If the displayed file vanished,
+    /// land on the nearest remaining entry and load that.
+    pub(crate) fn apply_dir_refresh(&mut self, new_files: Vec<PathBuf>) {
+        // The debouncer can emit several batches for one user action; skip
+        // no-op refreshes (the re-sort stats every file on date/size modes).
+        if new_files == self.images {
+            return;
+        }
+        log::debug!(
+            "Directory refresh: {} images (was {})",
+            new_files.len(),
+            self.images.len()
+        );
+        let current = self.images.get(self.current_index).cloned();
+        self.images = new_files;
+        // Park current_index on the displayed path so the sort below
+        // preserves exactly that image's position.
+        if let Some(cur) = &current {
+            if let Some(idx) = self.images.iter().position(|p| p == cur) {
+                self.current_index = idx;
+            }
+        }
+        self.sort_images(self.settings.sort_mode);
+
+        match current {
+            Some(cur) if self.images.iter().any(|p| p == &cur) => {
+                let mtime = std::fs::metadata(&cur).and_then(|m| m.modified()).ok();
+                if mtime != self.current_mtime {
+                    // The file changed on disk: drop its stale cache entry
+                    // (freeing textures) and load it again. request_current
+                    // re-issues the Active load and refreshes active_rgba.
+                    if let Some(cached) = self.texture_cache.pop(&cur) {
+                        if let Some(render_state) = self.render_state.clone() {
+                            let mut renderer = render_state.renderer.write();
+                            for id in cached.ids.into_iter().chain(cached.nearest_ids) {
+                                if Some(id) != self.image_texture_id {
+                                    renderer.free_texture(&id);
+                                }
+                            }
+                        }
+                    }
+                    self.request_current();
+                }
+                self.current_mtime = mtime;
+                self.scroll_to_target = true;
+            }
+            _ => {
+                if self.images.is_empty() {
+                    self.current_index = 0;
+                } else {
+                    self.current_index = self.current_index.min(self.images.len() - 1);
+                }
+                self.request_current();
+                self.scroll_to_target = true;
+            }
+        }
+    }
+
+    pub(crate) fn sort_images(&mut self, mode: SortMode) {        if self.images.is_empty() {
             return;
         }
 
@@ -759,5 +899,66 @@ mod tests {
         app.request_current();
         assert_eq!(app.image_texture_id, Some(egui::TextureId::User(1)));
         assert_eq!(app.displayed_texture_id(), Some(egui::TextureId::User(1)));
+    }
+
+    #[test]
+    fn dir_refresh_preserves_place_without_reload() {
+        let mut app = cached_app(&[("a.png", 10, 10), ("b.png", 10, 10)]);
+        app.current_index = 1; // b.png
+        app.request_current();
+        let target_before = app.target_path.clone();
+        assert_eq!(target_before, Some(PathBuf::from("b.png")));
+
+        // New file appears; listing arrives sorted differently.
+        app.apply_dir_refresh(vec![
+            PathBuf::from("b.png"),
+            PathBuf::from("a.png"),
+            PathBuf::from("c.png"),
+        ]);
+
+        assert_eq!(app.images.len(), 3);
+        // The displayed image is still the target and still selected.
+        assert_eq!(app.target_path, target_before);
+        assert_eq!(app.images[app.current_index], PathBuf::from("b.png"));
+        // No reload was issued for the unchanged image.
+        assert!(!app.is_loading);
+    }
+
+    #[test]
+    fn dir_refresh_reloads_when_file_changed_on_disk() {
+        let mut app = cached_app(&[("a.png", 10, 10), ("b.png", 10, 10)]);
+        app.current_index = 1;
+        app.request_current();
+        // Pretend the displayed file's mtime moved since it was loaded.
+        app.current_mtime = Some(std::time::SystemTime::UNIX_EPOCH);
+
+        // A new file appears alongside the changed one.
+        app.apply_dir_refresh(vec![
+            PathBuf::from("a.png"),
+            PathBuf::from("b.png"),
+            PathBuf::from("c.png"),
+        ]);
+
+        // request_current re-issued the Active load for the same path.
+        assert!(app.is_loading);
+        assert_eq!(app.target_path, Some(PathBuf::from("b.png")));
+        assert_eq!(app.images[app.current_index], PathBuf::from("b.png"));
+    }
+
+    #[test]
+    fn dir_refresh_lands_on_nearest_image_when_current_vanishes() {
+        let mut app = cached_app(&[("a.png", 10, 10), ("b.png", 10, 10)]);
+        // An uncached third image so the landing actually issues a load.
+        app.images.push(PathBuf::from("c.png"));
+        app.current_index = 1; // b.png
+        app.request_current();
+
+        // b.png is deleted externally.
+        app.apply_dir_refresh(vec![PathBuf::from("a.png"), PathBuf::from("c.png")]);
+
+        // Index clamps onto the nearest surviving entry and it loads.
+        assert_eq!(app.images[app.current_index], PathBuf::from("c.png"));
+        assert_eq!(app.target_path, Some(PathBuf::from("c.png")));
+        assert!(app.is_loading);
     }
 }
