@@ -107,7 +107,7 @@ There are two background threads plus the main (render) thread, connected by `st
 
 Zoom/pan reset on image switch per the configured `ZoomReset` setting (`always` / `dimension_change` / `never`, default `dimension_change`) — see the tests in `app/loader.rs`. All settings persist to `config.ron` (serde + RON, `#[serde(default)]` so partial files load; directory from the `directories` crate, overridable with `PHOTON_CONFIG_DIR`). Settings are rewritten only when they actually change, so hand edits survive while nothing is touched.
 
-All concurrency is raw `std::thread` + `mpsc`; the previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir).
+All concurrency is raw `std::thread` + `mpsc`; the previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font).
 
 ### GPU/textures
 
@@ -131,20 +131,23 @@ Defined in `src/main.rs` via `egui::KeyboardShortcut` and `Modifiers::COMMAND` (
 
 | Action | Shortcut |
 | --- | --- |
-| Open file/folder | `Cmd/Ctrl + O` (also the "📁 Open" button) |
-| Save as… | `Cmd/Ctrl + S` (save-as dialog; "✂ Save Selection As…" is button-only in Select mode) |
+| Open file/folder | `Cmd/Ctrl + O` (also the "Open" button) |
+| Save as… | `Cmd/Ctrl + S` (save-as dialog; "Save Selection As…" is button-only in Select mode) |
 | Copy (or crop-copy if a selection exists) | `Cmd/Ctrl + C` |
 | Paste image | `Cmd/Ctrl + V` |
 | Next image | `Space` / `Right Arrow` |
 | Previous image | `Backspace` / `Left Arrow` |
 | Cycle mouse mode | `Tab` / `Backslash` |
 
+GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/`Paste`/`Cut` at the input layer — the key events never exist on winit platforms. Copy/paste are therefore dispatched from those command events (plus key-shortcut fallbacks) in `take_shortcut_actions` (`src/main.rs`), which has synthetic-input tests. If a TextEdit is ever added, it will not see Ctrl+C/V — handle it there deliberately.
+
 ---
 
 ## 5. Testing
 
-The suite is **seventeen unit tests** across six files, all pure-CPU:
+The suite is **twenty-one unit tests** across six files, all pure-CPU:
 
+- `main.rs` — shortcut dispatch (`take_shortcut_actions`): clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode shortcuts, no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
 - `dir_walker.rs` — `test_is_supported_image` (extension recognition).
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test.
 - `app/clipboard.rs` — three `crop_rgba` tests (empty rect, single pixel, clamping) and a `current_rgba` test for following the displayed layer.
@@ -166,7 +169,7 @@ Run tests with `cargo test --release` (debug builds are slow to compile and run 
   - `mod` declarations in `src/main.rs` (`app`, `dir_walker`, `image_loader`) and in `src/app.rs` (`canvas`, `clipboard`, `loader`, `saver`, `theme`).
   - Functionality for `PhotonApp` is split across `impl PhotonApp` blocks in the `app/*.rs` files by concern, not in one big file.
 - Error handling: the application uses **string errors** (`Result<_, String>` in `image_loader::load_image` and the saver) and `println!` for background-thread diagnostics rather than `anyhow`/`thiserror`. Match the surrounding pattern; do not introduce a new error type unless the task requires it.
-- Debug logging is currently `println!("DEBUG: ...")` and `"Worker loaded: ..."` — there is no `log`/`tracing` facade.
+- Diagnostics go through the **`log` facade + `env_logger`** (default filter `photon=info,warn` so dependency crates like zbus/wgpu stay quiet; `RUST_LOG` overrides). Use `log::debug!`/`info!`/`warn!`/`error!` — no raw `println!` diagnostics.
 - eframe/egui 0.34 APIs are used (e.g. the unified `egui::Panel::top/bottom/left` with `show_inside` from `App::ui`, `ComboBox::from_id_salt`, `TexelCopyTextureInfo`/`TexelCopyBufferLayout`, `StrokeKind::Outside`, `TextWrapMode::Extend`). The wgpu version is 29. Match these API versions exactly; do not pull in newer or older wgpu APIs.
 - When editing existing code, follow `CLAUDE.md` (in the repo root): surface assumptions, prefer the minimum change that solves the problem, touch only what the task requires, match surrounding style, and do not delete pre-existing dead code — mention it instead. (The `CLAUDE.md` file also contains a strict instruction: never suggest "let's go with a simpler approach"; if stuck, ask for clarification.)
 

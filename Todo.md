@@ -121,22 +121,26 @@ Items marked ✅ are done as of 2026-10-11 and kept here for the record.
       the primary dev platform; fallbacks: XWayland or wl-clipboard-rs
       directly.
 
+## Done 2026-10-11 (follow-up pass)
+
+- [x] **Ctrl+C/V shortcuts dead** (reported 2026-10-11: worked via buttons
+      only) — egui-winit rewrites those combos into `Event::Copy`/`Paste`
+      before they ever become key events. Dispatch now listens for the
+      command events with key-shortcut fallbacks; synthetic-input tests cover
+      it (`take_shortcut_actions`).
+- [x] **egui-ecosystem adoptions from the Sophia-vetted shortlist** —
+      `egui-phosphor 0.12` (toolbar/overlay icons replace emoji), `log` +
+      `env_logger` (default filter `photon=info,warn`; all `println!`
+      diagnostics converted), `rfd 0.17`, `lru 0.18.5`. `egui_logger`'s
+      in-app console widget remains available if ever wanted (its backend
+      duplicates env_logger's for our terminal-only use).
+
 ## Dependency / format notes
 
 - [ ] **egui-ecosystem shortlist** (crate-shopped from Sophia 2026-10-11 —
       same egui 0.34.3 line, so their version pins and gotchas transfer
-      directly):
-  - **Adopt candidates (low risk):**
-    - `egui-phosphor 0.12.0` — Phosphor icon font; replaces the emoji
-      toolbar buttons (📁 ⚙ 💾 ✂) with crisp, consistent icons. Same
-      version Sophia uses.
-    - `log` + `env_logger` 0.11 + `egui_logger 0.10.1` — the logging move,
-      using Sophia's exact vetted stack (egui_logger also provides an
-      in-app console widget if we ever want one; its backend works without
-      showing any UI). Note: Sophia vendors a narrow-pane wrapping fix —
-      only relevant if we display the console in a tight space.
-    - Bumps: `rfd 0.15 → 0.17`, `lru 0.17 → 0.18.5` (Sophia vetted 0.18.5
-      for exactly our use: eviction-ordered handle registry).
+      directly). Adopted 2026-10-11: egui-phosphor, log+env_logger, rfd/lru
+      bumps. Remaining:
   - **Feature-gated adopts (pick up with their feature):**
     - `notify-debouncer-full 0.7` — folder watching for the open directory
       (debounced; re-exports `notify`, so it's the only direct dep). Use
