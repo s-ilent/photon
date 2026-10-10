@@ -19,6 +19,9 @@ wgpu = "29"
 egui-wgpu = "0.34"
 lru = "0.17.0"
 image_dds = { version = "0.7", default-features = false, features = ["ddsfile", "image"] }
+serde = { version = "1.0.229", features = ["derive"] }
+ron = "0.12.2"
+directories = "6.0.0"
 
 [dev-dependencies]
 tempfile = "3"

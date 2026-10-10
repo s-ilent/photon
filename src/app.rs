@@ -118,7 +118,8 @@ impl MouseMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortMode {
     Alphabetical,
     AlphabeticalDesc,
@@ -140,33 +141,11 @@ impl SortMode {
             SortMode::FileSizeSmallest => "Size (Smallest)",
         }
     }
-
-    pub fn config_value(&self) -> &'static str {
-        match self {
-            SortMode::Alphabetical => "name_az",
-            SortMode::AlphabeticalDesc => "name_za",
-            SortMode::DateModified => "date_newest",
-            SortMode::DateModifiedOldest => "date_oldest",
-            SortMode::FileSize => "size_largest",
-            SortMode::FileSizeSmallest => "size_smallest",
-        }
-    }
-
-    pub fn from_config(value: &str) -> Option<Self> {
-        match value {
-            "name_az" => Some(SortMode::Alphabetical),
-            "name_za" => Some(SortMode::AlphabeticalDesc),
-            "date_newest" => Some(SortMode::DateModified),
-            "date_oldest" => Some(SortMode::DateModifiedOldest),
-            "size_largest" => Some(SortMode::FileSize),
-            "size_smallest" => Some(SortMode::FileSizeSmallest),
-            _ => None,
-        }
-    }
 }
 
 /// When the view resets (back to fit) on an image switch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ZoomReset {
     /// Reset on every switch.
     Always,
@@ -185,26 +164,13 @@ impl ZoomReset {
             ZoomReset::Never => "Never",
         }
     }
-
-    pub fn config_value(&self) -> &'static str {
-        match self {
-            ZoomReset::Always => "always",
-            ZoomReset::DimensionChange => "dimension_change",
-            ZoomReset::Never => "never",
-        }
-    }
-
-    pub fn from_config(value: &str) -> Option<Self> {
-        match value {
-            "always" => Some(ZoomReset::Always),
-            "dimension_change" => Some(ZoomReset::DimensionChange),
-            "never" => Some(ZoomReset::Never),
-            _ => None,
-        }
-    }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// User-facing settings. Persisted to `config.ron` (see `app/config.rs`);
+/// `#[serde(default)]` fills missing fields from `Default` so partial or
+/// older config files stay loadable.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     pub dark_mode: bool,
     pub font_size: f32,

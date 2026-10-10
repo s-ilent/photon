@@ -1,16 +1,18 @@
-//! Load and save the user configuration file (`photon.conf`).
+//! Load and save the user configuration file (`config.ron`).
 //!
-//! Plain `key = value` lines with `#` comments, deliberately hand-parsed:
-//! the settings are a small fixed set, so a real TOML/Serde stack isn't worth
-//! the dependency weight. Unknown keys and invalid values fall back to the
-//! default with a warning on stdout; missing keys always do.
+//! Settings are serialized with serde + RON (`#[serde(default)]` on
+//! `AppSettings` means missing fields fall back to defaults; unknown fields
+//! are ignored). One unparseable value fails the whole file — we then start
+//! from defaults and the next settings change rewrites the file, so nothing
+//! is lost beyond the single bad value.
 
-use crate::app::{AppSettings, PhotonApp, SortMode, ZoomReset};
+use crate::app::{AppSettings, PhotonApp};
 use std::path::PathBuf;
 
-/// Resolve the configuration directory: `$PHOTON_CONFIG_DIR`, then
-/// `$XDG_CONFIG_HOME/photon`, then `$HOME/.config/photon`.
-/// `None` when no usable base directory is set (config disabled).
+/// Resolve the configuration directory: `$PHOTON_CONFIG_DIR` if set, else the
+/// `directories` crate's per-project config dir (XDG config on Linux,
+/// `%APPDATA%` on Windows, `~/Library/Application Support` on macOS).
+/// `None` when the OS gives us nothing (config disabled).
 pub(crate) fn config_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("PHOTON_CONFIG_DIR") {
         if !dir.is_empty() {
@@ -18,99 +20,34 @@ pub(crate) fn config_dir() -> Option<PathBuf> {
         }
     }
 
-    let base = match std::env::var("XDG_CONFIG_HOME") {
-        Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => PathBuf::from(std::env::var("HOME").ok()?).join(".config"),
-    };
-    Some(base.join("photon"))
+    directories::ProjectDirs::from("", "", "Photon").map(|dirs| dirs.config_dir().to_path_buf())
 }
 
 pub(crate) fn config_path() -> Option<PathBuf> {
-    config_dir().map(|dir| dir.join("photon.conf"))
+    config_dir().map(|dir| dir.join("config.ron"))
 }
 
-/// Parse settings from config text. Missing, unknown, or invalid entries keep
-/// their default value.
+/// Parse settings from RON text. Missing or unknown fields fall back to
+/// defaults; a malformed file yields defaults (the caller warns).
 pub(crate) fn parse_config(text: &str) -> AppSettings {
-    let mut settings = AppSettings::default();
-
-    for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let (key, value) = (key.trim(), value.trim());
-        if key.is_empty() || value.is_empty() {
-            continue;
-        }
-
-        let mut invalid = false;
-        match key {
-            "dark_mode" => match value.parse() {
-                Ok(v) => settings.dark_mode = v,
-                Err(_) => invalid = true,
-            },
-            "font_size" => match value.parse::<f32>() {
-                Ok(v) if (6.0..=96.0).contains(&v) => settings.font_size = v,
-                _ => invalid = true,
-            },
-            "scale_to_fit" => match value.parse() {
-                Ok(v) => settings.scale_to_fit = v,
-                Err(_) => invalid = true,
-            },
-            "use_sharp_scaling" => match value.parse() {
-                Ok(v) => settings.use_sharp_scaling = v,
-                Err(_) => invalid = true,
-            },
-            "checkerboard_bg" => match value.parse() {
-                Ok(v) => settings.checkerboard_bg = v,
-                Err(_) => invalid = true,
-            },
-            "zoom_reset" => match ZoomReset::from_config(value) {
-                Some(v) => settings.zoom_reset = v,
-                None => invalid = true,
-            },
-            "sort_mode" => match SortMode::from_config(value) {
-                Some(v) => settings.sort_mode = v,
-                None => invalid = true,
-            },
-            other => {
-                println!("Config: ignoring unknown key {:?}", other);
-                continue;
-            }
-        }
-        if invalid {
-            println!("Config: invalid value {:?} for key {:?}, using default", value, key);
-        }
-    }
-
-    settings
+    ron::from_str(text).unwrap_or_else(|e| {
+        println!("Config: failed to parse config.ron ({}), using defaults", e);
+        AppSettings::default()
+    })
 }
 
-/// Serialize settings to config-file text.
+/// Serialize settings to pretty RON.
 pub(crate) fn serialize_settings(settings: &AppSettings) -> String {
-    format!(
-        "# Photon configuration\n\
-         # One \"key = value\" per line; unknown keys are ignored on load.\n\
-         dark_mode = {}\n\
-         font_size = {}\n\
-         scale_to_fit = {}\n\
-         use_sharp_scaling = {}\n\
-         checkerboard_bg = {}\n\
-         zoom_reset = {}\n\
-         sort_mode = {}\n",
-        settings.dark_mode,
-        settings.font_size,
-        settings.scale_to_fit,
-        settings.use_sharp_scaling,
-        settings.checkerboard_bg,
-        settings.zoom_reset.config_value(),
-        settings.sort_mode.config_value(),
-    )
+    ron::ser::to_string_pretty(settings, ron::ser::PrettyConfig::default())
+        .unwrap_or_else(|e| {
+            println!("Config: failed to serialize settings ({}), writing defaults", e);
+            ron::ser::to_string_pretty(&AppSettings::default(), ron::ser::PrettyConfig::default())
+                .expect("default settings always serialize")
+        })
 }
 
 impl PhotonApp {
-    /// Load `photon.conf` at startup, if present and readable.
+    /// Load `config.ron` at startup, if present and readable.
     pub(crate) fn load_config(&mut self) {
         let Some(path) = config_path() else {
             return;
@@ -140,7 +77,7 @@ impl PhotonApp {
                 return;
             }
         }
-        let tmp = path.with_extension("conf.tmp");
+        let tmp = path.with_extension("ron.tmp");
         let write =
             std::fs::write(&tmp, serialize_settings(&self.settings)).and_then(|()| {
                 std::fs::rename(&tmp, &path)
@@ -154,11 +91,11 @@ impl PhotonApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::{SortMode, ZoomReset};
 
     #[test]
     fn empty_config_yields_defaults() {
         assert_eq!(parse_config(""), AppSettings::default());
-        assert_eq!(parse_config("# only a comment\n\n"), AppSettings::default());
     }
 
     #[test]
@@ -178,26 +115,16 @@ mod tests {
     }
 
     #[test]
-    fn overrides_apply_and_unknown_keys_are_ignored() {
-        let text = "\
-            # comment\n\
-            dark_mode = false\n\
-            zoom_reset = never\n\
-            sort_mode = name_za\n\
-            font_size = 31.5\n\
-            future_feature = enabled\n\
-            garbage line without equals\n";
-        let parsed = parse_config(text);
+    fn partial_config_fills_defaults() {
+        let parsed = parse_config("(\n    dark_mode: false,\n)");
         assert!(!parsed.dark_mode);
-        assert_eq!(parsed.zoom_reset, ZoomReset::Never);
-        assert_eq!(parsed.sort_mode, SortMode::AlphabeticalDesc);
-        assert_eq!(parsed.font_size, 31.5);
+        assert_eq!(parsed.zoom_reset, ZoomReset::DimensionChange);
+        assert_eq!(parsed.font_size, 16.0);
     }
 
     #[test]
-    fn invalid_values_fall_back_to_defaults() {
-        let text = "zoom_reset = sideways\nsort_mode = random\nfont_size = 1000\n";
-        let parsed = parse_config(text);
-        assert_eq!(parsed, AppSettings::default());
+    fn malformed_config_yields_defaults() {
+        assert_eq!(parse_config("this is not (valid ron"), AppSettings::default());
+        assert_eq!(parse_config("(zoom_reset: sideways)"), AppSettings::default());
     }
 }
