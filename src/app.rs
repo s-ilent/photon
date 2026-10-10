@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use wgpu::Device;
 
+use crate::render;
+
 // Submodule Declarations
 mod canvas;
 mod clipboard;
@@ -42,13 +44,10 @@ pub enum WorkerMessage {
 pub enum LoadResult {
     Loaded {
         path: Option<PathBuf>,
-        /// One registered-ready texture view per layer (cubemap face / array
-        /// entry); ordinary images have exactly one.
-        views: Vec<wgpu::TextureView>,
-        width: u32,
-        height: u32,
-        /// True when the layers are cubemap faces (drives face labels).
-        is_cubemap: bool,
+        /// Fully GPU-resident image: every layer chunked into tiles, bind
+        /// groups and vertex quads built (built on the worker, which owns
+        /// the device/queue).
+        image: Arc<render::RenderImage>,
         /// Set for `Paste` and `Active` loads so copy/save can reuse the
         /// decoded bytes; `None` for `Preload` so the bounded result channel
         /// doesn't pin several full-size buffers at once.
@@ -77,20 +76,11 @@ pub struct SaveStatus {
     pub(crate) expires: Instant,
 }
 
-/// A cached image: one registered texture per layer plus shared dimensions.
-/// All `ids` belong together and are freed together on eviction. Textures
-/// are always registered with the linear sampler — sharp/pixelated scaling
-/// is a shader-pass feature, not a sampler switch.
-#[derive(Clone)]
-pub struct CachedTextures {
-    pub(crate) ids: Vec<egui::TextureId>,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    /// True when the layers are cubemap faces (drives face labels).
-    pub(crate) is_cubemap: bool,
-}
-
 /// Labels for cubemap faces in DirectX file order (+X, -X, +Y, -Y, +Z, -Z).
+///
+/// (The texture cache stores `Arc<RenderImage>` directly — all metadata lives
+/// on the RenderImage, and GPU lifetime is wgpu refcounting, so eviction is
+/// just dropping the Arc.)
 const CUBEMAP_FACE_LABELS: [&str; 6] = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
 
 /// Mouse modes that change how input is interpreted
@@ -201,7 +191,7 @@ impl Default for AppSettings {
 pub struct PhotonApp {
     pub(crate) images: Vec<PathBuf>,
     pub(crate) current_index: usize,
-    pub(crate) texture_cache: LruCache<PathBuf, CachedTextures>,
+    pub(crate) texture_cache: LruCache<PathBuf, Arc<render::RenderImage>>,
     pub(crate) load_receiver: Option<Receiver<LoadResult>>,
     pub(crate) request_sender: Option<Sender<WorkerMessage>>,
     pub(crate) latest_req_id: Arc<AtomicU64>,
@@ -219,7 +209,11 @@ pub struct PhotonApp {
     pub(crate) device: Option<Device>,
     pub(crate) queue: Option<Arc<wgpu::Queue>>,
     pub(crate) render_state: Option<Arc<RenderState>>,
-    pub(crate) image_texture_id: Option<egui::TextureId>,
+    /// Pipeline + bind group layouts for the image canvas pass; built at
+    /// startup against the surface format and shared with the loader worker.
+    pub(crate) image_renderer: Option<Arc<render::ImageRendererState>>,
+    /// The displayed image, GPU-resident. `None` while nothing is loaded.
+    pub(crate) displayed_image: Option<Arc<render::RenderImage>>,
     pub(crate) settings: AppSettings,
     pub(crate) last_font_size: f32,
     pub(crate) settings_open: bool,
@@ -234,11 +228,7 @@ pub struct PhotonApp {
     /// Last-seen modification time of the displayed image, used by the
     /// directory watcher to decide whether the file actually changed on disk.
     pub(crate) current_mtime: Option<std::time::SystemTime>,
-    /// Texture id of every layer of the displayed image, in file order
-    /// (cubemap faces in DirectX order for cubemaps). Single-layer images
-    /// have exactly one entry; `image_texture_id` is the displayed one.
-    pub(crate) layer_texture_ids: Vec<egui::TextureId>,
-    /// Which of `layer_texture_ids` is displayed.
+    /// Which layer (cubemap face / array entry) of `displayed_image` is shown.
     pub(crate) current_layer: usize,
     /// True when the loaded layers are cubemap faces (drives face labels).
     pub(crate) layers_are_cubemap: bool,
@@ -288,7 +278,8 @@ impl PhotonApp {
             device: None,
             queue: None,
             render_state: None,
-            image_texture_id: None,
+            image_renderer: None,
+            displayed_image: None,
             settings: AppSettings::default(),
             last_font_size: 16.0,
             settings_open: false,
@@ -298,7 +289,6 @@ impl PhotonApp {
             dir_watch_receiver: None,
             dir_watch_stop: None,
             current_mtime: None,
-            layer_texture_ids: Vec::new(),
             current_layer: 0,
             layers_are_cubemap: false,
             is_loading_dir: false,
@@ -323,11 +313,14 @@ impl PhotonApp {
     /// Display layer `index` of the loaded image (cubemap face / array entry).
     /// All layers share dimensions, so zoom and pan are untouched.
     pub(crate) fn select_layer(&mut self, index: usize) {
-        if index >= self.layer_texture_ids.len() {
+        let layers = self
+            .displayed_image
+            .as_ref()
+            .map_or(0, |image| image.layers.len());
+        if index >= layers {
             return;
         }
         self.current_layer = index;
-        self.image_texture_id = Some(self.layer_texture_ids[index]);
     }
 
     /// Bottom-bar label for layer `index` of the displayed image: cubemap

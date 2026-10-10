@@ -92,7 +92,7 @@ impl PhotonApp {
             return;
         }
 
-        let Some(tex_id) = self.image_texture_id else {
+        let Some(image) = self.displayed_image.clone() else {
             if self.is_loading {
                 self.ui_status_overlay(
                     ui.ctx(),
@@ -168,17 +168,28 @@ impl PhotonApp {
             }
         }
 
-        // Draw the image
-        painter.image(
-            tex_id,
+        // Draw the image through the custom render pass (shader-based sharp
+        // scaling; oversized images arrive pre-chunked into tiles). Dimmed
+        // while the active load is in flight; the spinner draws on top.
+        let tint: [f32; 4] = if self.is_loading {
+            [0.5, 0.5, 0.5, 1.0]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        };
+        // Sharp sampling only while magnifying: nearest-neighbor minification
+        // just drops pixels (aliasing), which reads as a rendering bug.
+        let sharp = self.settings.use_sharp_scaling && self.zoom >= 1.0;
+        let callback = crate::render::DrawImageCallback::new(
+            image,
+            self.current_layer,
+            sharp,
+            tint,
             image_screen_rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            if self.is_loading {
-                egui::Color32::from_gray(128)
-            } else {
-                egui::Color32::WHITE
-            },
         );
+        painter.add(egui_wgpu::Callback::new_paint_callback(
+            image_screen_rect,
+            callback,
+        ));
 
         if self.is_loading {
             self.ui_status_overlay(

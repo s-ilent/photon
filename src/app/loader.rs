@@ -1,15 +1,14 @@
 use crate::app::{
-    CachedTextures, LoadRequest, LoadResult, PhotonApp, Priority, SortMode, StatusOverlay,
-    WorkerMessage, ZoomReset,
+    LoadRequest, LoadResult, PhotonApp, Priority, SortMode, StatusOverlay, WorkerMessage,
+    ZoomReset,
 };
 use crate::dir_walker;
 use eframe::egui;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{channel, sync_channel};
+use std::sync::{mpsc, Arc};
 use std::time::Instant;
-use wgpu::FilterMode;
 
 impl PhotonApp {
     pub(crate) fn init_worker(&mut self) {
@@ -19,9 +18,12 @@ impl PhotonApp {
 
         let device = self.device.clone().expect("wgpu device not initialized");
         let queue = self.queue.clone().expect("wgpu queue not initialized");
+        let renderer =
+            self.image_renderer.clone().expect("image renderer not initialized");
+        let tile_layout = renderer.tile_layout.clone();
 
-        let (req_tx, req_rx) = channel::<WorkerMessage>();
-        let (res_tx, res_rx) = sync_channel(5);
+        let (req_tx, req_rx) = mpsc::channel::<WorkerMessage>();
+        let (res_tx, res_rx) = mpsc::sync_channel(5);
 
         self.request_sender = Some(req_tx);
         self.load_receiver = Some(res_rx);
@@ -140,20 +142,12 @@ impl PhotonApp {
                 let (width, height) = (decoded.width, decoded.height);
                 let is_cubemap = decoded.is_cubemap;
 
-                // Reject images the GPU can't represent before touching wgpu.
-                // An oversized texture used to sail through as Loaded and only
-                // fail asynchronously in wgpu validation, leaving the UI
-                // spinning forever with no error surfaced.
+                // Images larger than the GPU's per-texture limit are chunked
+                // into tiles here and reassembled by the render pass, so the
+                // old oversized rejection only needs to cover zero extents.
                 let max_dim = device.limits().max_texture_dimension_2d;
-                if width == 0 || height == 0 || width > max_dim || height > max_dim {
-                    let reason = if width == 0 || height == 0 {
-                        format!("Image has zero extent ({}x{})", width, height)
-                    } else {
-                        format!(
-                            "Image is {}x{}, exceeding the GPU texture limit of {}px",
-                            width, height, max_dim
-                        )
-                    };
+                if width == 0 || height == 0 {
+                    let reason = format!("Image has zero extent ({}x{})", width, height);
                     log::warn!("Failed to load image {:?}: {}", path_for_tx, reason);
                     let _ = res_tx.send(LoadResult::Failed {
                         path: path_for_tx,
@@ -163,61 +157,38 @@ impl PhotonApp {
                     continue;
                 }
 
-                // Upload every layer as its own texture so face/layer
-                // switching is instant once loaded.
+                // Build the GPU-resident image: every layer, chunked, with
+                // bind groups and vertex quads. Active/Paste results hand the
+                // decoded bytes back too so copy/save can reuse them.
                 let upload_start = Instant::now();
-                let mut views = Vec::with_capacity(decoded.layers.len());
-                for layer in &decoded.layers {
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("image_texture"),
-                        size: wgpu::Extent3d {
-                            width,
-                            height,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: Default::default(),
-                        },
-                        layer,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            rows_per_image: None,
-                            bytes_per_row: Some(width * 4),
-                        },
-                        wgpu::Extent3d {
-                            width,
-                            height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-
-                    views.push(texture.create_view(&Default::default()));
-                }
+                let render_ctx = crate::render::RenderContext {
+                    device: &device,
+                    queue: &queue,
+                    tile_layout: &tile_layout,
+                    max_dim,
+                };
+                let image = Arc::new(crate::render::build_render_image(
+                    &render_ctx,
+                    decoded.layers.clone(),
+                    width,
+                    height,
+                    is_cubemap,
+                ));
                 let _upload_time = upload_start.elapsed();
 
-                // Hand the decoded bytes back with Active/Paste results so
-                // copy/save can reuse them without re-reading the file. The
-                // texture upload only borrows, so the buffers move for free.
                 let rgba_for_res =
                     rgba_for_res.or_else(|| is_active_load.then_some(decoded.layers));
 
                 if let Some(ref path) = path_for_tx {
                     log::info!(
-                        "Worker loaded: {:?} | {} layer(s) | Total: {:?}",
+                        "Worker loaded: {:?} | {} layer(s), {} tile(s) | Total: {:?}",
                         path.file_name(),
-                        views.len(),
+                        image.layers.len(),
+                        image
+                            .layers
+                            .iter()
+                            .map(|l| l.tiles.len())
+                            .sum::<usize>(),
                         start_total.elapsed()
                     );
                 } else {
@@ -230,10 +201,7 @@ impl PhotonApp {
                 // This will block if res_rx is full (sync_channel(5))
                 let _ = res_tx.send(LoadResult::Loaded {
                     path: path_for_tx,
-                    views,
-                    width,
-                    height,
-                    is_cubemap,
+                    image,
                     rgba: rgba_for_res,
                 });
             }
@@ -279,12 +247,15 @@ impl PhotonApp {
             // Compare against the *previous* image's dimensions before they
             // are replaced below: zoom resets only when the new image is a
             // different size (per the configured ZoomReset behavior).
-            let dimensions_changed = self.image_dimensions != Some((cached.width, cached.height));
-            self.layer_texture_ids = cached.ids;
+            let (w, h) = cached.dims();
+            let dimensions_changed = self.image_dimensions != Some((w, h));
+            self.displayed_image = Some(cached);
             self.current_layer = 0;
-            self.layers_are_cubemap = cached.is_cubemap;
-            self.image_texture_id = self.layer_texture_ids.first().copied();
-            self.image_dimensions = Some((cached.width, cached.height));
+            self.layers_are_cubemap = self
+                .displayed_image
+                .as_ref()
+                .is_some_and(|image| image.is_cubemap);
+            self.image_dimensions = Some((w, h));
             self.target_path = Some(path.clone());
             self.is_loading = false;
             self.is_pasted = false;
@@ -346,133 +317,69 @@ impl PhotonApp {
         if let Some(ref mut receiver) = self.load_receiver {
             while let Ok(result) = receiver.try_recv() {
                 match result {
-                    LoadResult::Loaded {
-                        path,
-                        views: texture_views,
-                        width,
-                        height,
-                        is_cubemap,
-                        rgba,
-                    } => {
-                        if let Some(ref render_state) = self.render_state {
-                            let device = &render_state.device;
-                            let mut renderer = render_state.renderer.write();
+                    LoadResult::Loaded { path, image, rgba } => {
+                        // No manual GPU frees: cached and displayed images are
+                        // Arcs; wgpu frees the resources when the last
+                        // reference (including in-flight frames) drops.
+                        let effective_path =
+                            path.clone().unwrap_or_else(|| PathBuf::from("__pasted__"));
+                        self.texture_cache.put(effective_path, image.clone());
 
-                            let effective_path =
-                                path.clone().unwrap_or_else(|| PathBuf::from("__pasted__"));
+                        // Update display if this was the active target
+                        let is_active = if let Some(ref p) = path {
+                            self.target_path.as_ref() == Some(p)
+                        } else {
+                            self.is_pasted
+                        };
 
-                            // 1. If this path is already cached, free the old
-                            //    texture set unless it's what's on screen.
-                            if let Some(cached) = self.texture_cache.get(&effective_path) {
-                                for old_id in &cached.ids {
-                                    if Some(*old_id) != self.image_texture_id {
-                                        renderer.free_texture(old_id);
-                                    }
-                                }
-                            }
+                        if is_active {
+                            let (width, height) = image.dims();
+                            let dimensions_changed =
+                                self.image_dimensions != Some((width, height));
+                            let is_cubemap = image.is_cubemap;
+                            self.displayed_image = Some(image);
+                            self.current_layer = 0;
+                            self.layers_are_cubemap = is_cubemap;
+                            self.image_dimensions = Some((width, height));
+                            self.is_loading = false;
+                            self.error_overlay = None;
 
-                            // 2. Register every layer with the linear sampler
-                            //    (sharp scaling belongs to the shader pass).
-                            let new_ids: Vec<egui::TextureId> = texture_views
-                                .iter()
-                                .map(|view| {
-                                    renderer
-                                        .register_native_texture(device, view, FilterMode::Linear)
-                                })
-                                .collect();
-
-                            // 3. Put in cache and handle eviction correctly
-                            if self.texture_cache.len() == self.texture_cache.cap().into() {
-                                // Manually pop to avoid leaking the GPU resources
-                                if let Some((_, evicted)) = self.texture_cache.pop_lru() {
-                                    // Only free ids not currently on screen
-                                    for evict_id in &evicted.ids {
-                                        if Some(*evict_id) != self.image_texture_id {
-                                            renderer.free_texture(evict_id);
-                                        }
-                                    }
-                                }
-                            }
-                            self.texture_cache.put(
-                                effective_path.clone(),
-                                CachedTextures {
-                                    ids: new_ids.clone(),
-                                    width,
-                                    height,
-                                    is_cubemap,
-                                },
-                            );
-
-                            // 4. Update display if this was the active target
-                            let is_active = if let Some(ref p) = path {
-                                self.target_path.as_ref() == Some(p)
-                            } else {
-                                self.is_pasted
+                            let reset = match self.settings.zoom_reset {
+                                ZoomReset::Always => true,
+                                ZoomReset::DimensionChange => dimensions_changed,
+                                ZoomReset::Never => false,
                             };
-
-                            if is_active {
-                                // 5. Free the previous image's textures that
-                                //    are no longer in the cache.
-                                for old_id in std::mem::take(&mut self.layer_texture_ids) {
-                                    let mut in_cache = false;
-                                    for (_, cached) in self.texture_cache.iter() {
-                                        if cached.ids.contains(&old_id) {
-                                            in_cache = true;
-                                            break;
-                                        }
-                                    }
-                                    if !in_cache {
-                                        renderer.free_texture(&old_id);
-                                    }
-                                }
-
-                                let dimensions_changed =
-                                    self.image_dimensions != Some((width, height));
-                                self.layer_texture_ids = new_ids;
-                                self.current_layer = 0;
-                                self.layers_are_cubemap = is_cubemap;
-                                self.image_texture_id = self.layer_texture_ids.first().copied();
-                                self.image_dimensions = Some((width, height));
-                                self.is_loading = false;
-                                self.error_overlay = None;
-
-                                let reset = match self.settings.zoom_reset {
-                                    ZoomReset::Always => true,
-                                    ZoomReset::DimensionChange => dimensions_changed,
-                                    ZoomReset::Never => false,
-                                };
-                                if reset {
-                                    self.zoom = 1.0;
-                                    self.pan = egui::Vec2::ZERO;
-                                    self.selection = None;
-                                    self.selection_image_rect = None;
-                                    self.selection_start = None;
-
-                                    if self.settings.scale_to_fit {
-                                        self.needs_fit = true;
-                                    }
-                                }
-
-                                if path.is_none() {
-                                    self.pasted_rgba = rgba.and_then(|mut layers| layers.pop());
-                                } else {
-                                    self.pasted_rgba = None;
-                                    self.active_rgba = rgba;
-                                }
+                            if reset {
+                                self.zoom = 1.0;
+                                self.pan = egui::Vec2::ZERO;
+                                self.selection = None;
+                                self.selection_image_rect = None;
+                                self.selection_start = None;
 
                                 if self.settings.scale_to_fit {
                                     self.needs_fit = true;
                                 }
                             }
-                            // Non-target results (neighbor preloads, stale
-                            // actives) are cached above but never displayed:
-                            // showing them as a dimmed "intermediate" put the
-                            // neighbor's pixels on screen for the wrong file.
-                            // While loading, the previous image stays visible
-                            // under the spinner until the target arrives.
 
-                            ctx.request_repaint();
+                            if path.is_none() {
+                                self.pasted_rgba = rgba.and_then(|mut layers| layers.pop());
+                            } else {
+                                self.pasted_rgba = None;
+                                self.active_rgba = rgba;
+                            }
+
+                            if self.settings.scale_to_fit {
+                                self.needs_fit = true;
+                            }
                         }
+                        // Non-target results (neighbor preloads, stale
+                        // actives) are cached above but never displayed:
+                        // showing them as a dimmed "intermediate" put the
+                        // neighbor's pixels on screen for the wrong file.
+                        // While loading, the previous image stays visible
+                        // under the spinner until the target arrives.
+
+                        ctx.request_repaint();
                     }
                     LoadResult::Failed {
                         path,
@@ -514,29 +421,16 @@ impl PhotonApp {
         // Clear any stale error from the previous folder before starting anew.
         self.error_overlay = None;
 
-        // Clear all old textures to prevent leaks
-        if let Some(ref render_state) = self.render_state {
-            let mut renderer = render_state.renderer.write();
+        // Drop all cached and displayed images; wgpu frees the GPU resources
+        // when the last reference (including in-flight frames) is gone.
+        self.texture_cache.clear();
+        self.displayed_image = None;
 
-            // 1. Free current image
-            if let Some(id) = self.image_texture_id {
-                renderer.free_texture(&id);
-            }
-
-            // 2. Free everything in cache
-            while let Some((_, cached)) = self.texture_cache.pop_lru() {
-                for id in cached.ids {
-                    renderer.free_texture(&id);
-                }
-            }
-        }
-
-        let (tx, rx) = channel();
+        let (tx, rx) = mpsc::channel();
         self.dir_load_receiver = Some(rx);
         self.is_loading_dir = true;
         self.images.clear();
         self.current_index = 0;
-        self.image_texture_id = None;
         self.is_pasted = false;
 
         let path_buf = path.to_path_buf();
@@ -551,14 +445,14 @@ impl PhotonApp {
         // listings. Dropping `dir_watch_stop` (replaced here) stops any
         // previous watcher thread; the Debouncer lives in the thread, so its
         // drop unregisters the watch on exit.
-        let (watch_tx, watch_rx) = channel();
-        let (stop_tx, stop_rx) = channel::<()>();
+        let (watch_tx, watch_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
         self.dir_watch_stop = Some(stop_tx);
         self.dir_watch_receiver = Some(watch_rx);
 
         let watch_dir = path.to_path_buf();
         std::thread::spawn(move || {
-            let (event_tx, event_rx) = channel();
+            let (event_tx, event_rx) = mpsc::channel();
             let mut debouncer = match notify_debouncer_full::new_debouncer(
                 std::time::Duration::from_millis(500),
                 None,
@@ -683,16 +577,10 @@ impl PhotonApp {
                     // The file changed on disk: drop its stale cache entry
                     // (freeing textures) and load it again. request_current
                     // re-issues the Active load and refreshes active_rgba.
-                    if let Some(cached) = self.texture_cache.pop(&cur) {
-                        if let Some(render_state) = self.render_state.clone() {
-                            let mut renderer = render_state.renderer.write();
-                            for id in cached.ids {
-                                if Some(id) != self.image_texture_id {
-                                    renderer.free_texture(&id);
-                                }
-                            }
-                        }
-                    }
+                    // The file changed on disk: drop its stale cache entry and
+                    // load it again (request_current re-issues the Active
+                    // load; the dropped Arc frees the old GPU resources).
+                    self.texture_cache.pop(&cur);
                     self.request_current();
                 }
                 self.current_mtime = mtime;
@@ -799,12 +687,12 @@ mod tests {
         for (name, w, h) in dims {
             app.texture_cache.put(
                 PathBuf::from(name),
-                CachedTextures {
-                    ids: vec![egui::TextureId::User(0)],
+                std::sync::Arc::new(crate::render::RenderImage {
                     width: *w,
                     height: *h,
                     is_cubemap: false,
-                },
+                    layers: vec![crate::render::Layer { tiles: Vec::new() }],
+                }),
             );
         }
         app.images = dims.iter().map(|(n, _, _)| PathBuf::from(*n)).collect();
@@ -862,16 +750,7 @@ mod tests {
         assert_eq!(app.zoom, 1.0);
     }
 
-    #[test]
-    fn sharp_scaling_setting_is_a_placeholder_without_sampler_effect() {
-        // Sharp/pixelated sampling is a shader-pass feature; samplers stay
-        // linear regardless of the setting (documented dead toggle).
-        let mut app = cached_app(&[("a.png", 100, 100)]);
-        app.current_index = 0;
-        app.settings.use_sharp_scaling = true;
-        app.request_current();
-        assert_eq!(app.image_texture_id, Some(egui::TextureId::User(0)));
-    }
+
 
     #[test]
     fn dir_refresh_preserves_place_without_reload() {

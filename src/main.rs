@@ -1,6 +1,7 @@
 mod app;
 mod dir_walker;
 mod image_loader;
+mod render;
 use crate::app::PhotonApp;
 use eframe::egui;
 use eframe::egui_wgpu::WgpuConfiguration;
@@ -257,12 +258,16 @@ impl eframe::App for app::PhotonApp {
                 }
 
                 // Cubemap face / array layer selector
-                if self.layer_texture_ids.len() > 1 {
+                let layer_count = self
+                    .displayed_image
+                    .as_ref()
+                    .map_or(0, |image| image.layers.len());
+                if layer_count > 1 {
                     ui.separator();
                     ui.label(if self.layers_are_cubemap { "Face:" } else { "Layer:" });
                     egui::ScrollArea::horizontal().show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            for i in 0..self.layer_texture_ids.len() {
+                            for i in 0..layer_count {
                                 let label = self.layer_label(i);
                                 if ui
                                     .add(
@@ -536,6 +541,20 @@ fn main() -> eframe::Result<()> {
                 app.device = Some(wgpu_state.device.clone());
                 app.queue = Some(Arc::new(wgpu_state.queue.clone()));
                 app.render_state = Some(Arc::new(wgpu_state.clone()));
+
+                // Image canvas pipeline: built against the surface's format
+                // and shared with callbacks (and, via the layouts, the
+                // loader worker).
+                let renderer_state = Arc::new(render::ImageRendererState::new(
+                    &wgpu_state.device,
+                    wgpu_state.target_format,
+                ));
+                wgpu_state
+                    .renderer
+                    .write()
+                    .callback_resources
+                    .insert(renderer_state.clone());
+                app.image_renderer = Some(renderer_state);
             }
 
             app.load_config();
