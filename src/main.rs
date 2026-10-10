@@ -9,12 +9,14 @@ use std::sync::Arc;
 
 impl eframe::App for app::PhotonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx();
+        // Owned Context (an Arc internally): panel closures below get `&mut ui`
+        // via show_inside, so a borrow of `ui` must not be held across them.
+        let ctx = ui.ctx().clone();
         // 0. Initial Setup (First Frame)
         static STARTUP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
         if STARTUP.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            app::PhotonApp::setup_dracula_theme(ctx, self.settings.font_size);
-            app::PhotonApp::load_custom_font(ctx);
+            app::PhotonApp::setup_dracula_theme(&ctx, self.settings.font_size);
+            app::PhotonApp::load_custom_font(&ctx);
         }
 
         // 0. Terminal Trace Logging
@@ -111,7 +113,7 @@ impl eframe::App for app::PhotonApp {
         }
         if do_paste {
             println!("DEBUG: Stateful Paste Triggered");
-            self.paste_from_clipboard(ctx);
+            self.paste_from_clipboard(&ctx);
         }
         if is_mode_switch {
             self.cycle_mode();
@@ -127,7 +129,7 @@ impl eframe::App for app::PhotonApp {
         if self.settings_open {
             egui::Window::new("Settings")
                 .open(&mut self.settings_open)
-                .show(ctx, |ui| {
+                .show(&ctx, |ui| {
                     ui.checkbox(
                         &mut self.settings.scale_to_fit,
                         "Scale to fit when switching images",
@@ -151,7 +153,7 @@ impl eframe::App for app::PhotonApp {
                     if self.settings.font_size != self.last_font_size {
                         self.last_font_size = self.settings.font_size;
                         if self.settings.dark_mode {
-                            app::PhotonApp::setup_dracula_theme(ctx, self.settings.font_size);
+                            app::PhotonApp::setup_dracula_theme(&ctx, self.settings.font_size);
                         }
                     }
 
@@ -159,7 +161,7 @@ impl eframe::App for app::PhotonApp {
                     if ui.button("Cycle Theme").clicked() {
                         self.settings.dark_mode = !self.settings.dark_mode;
                         if self.settings.dark_mode {
-                            app::PhotonApp::setup_dracula_theme(ctx, self.settings.font_size);
+                            app::PhotonApp::setup_dracula_theme(&ctx, self.settings.font_size);
                         } else {
                             ctx.set_visuals(egui::Visuals::light());
                         }
@@ -168,12 +170,12 @@ impl eframe::App for app::PhotonApp {
         }
 
         // Check for completed background loads
-        self.check_load_complete(ctx);
+        self.check_load_complete(&ctx);
         self.check_dir_load_complete();
-        self.check_save_status(ctx);
+        self.check_save_status(&ctx);
 
         // 1. Top Toolbar (App State & Settings)
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+        egui::Panel::top("toolbar").show_inside(ui, |ui| {
             // Far-right elements are laid out first (right-to-left)
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("⚙").clicked() {
@@ -194,7 +196,7 @@ impl eframe::App for app::PhotonApp {
                         self.copy_to_clipboard();
                     }
                     if ui.button("📥 Paste").clicked() {
-                        self.paste_from_clipboard(ctx);
+                        self.paste_from_clipboard(&ctx);
                     }
                     if ui.button("💾 Save").clicked() {
                         self.save_image_as();
@@ -233,7 +235,7 @@ impl eframe::App for app::PhotonApp {
         });
 
         // 2. Bottom Info Bar (Image Data)
-        egui::TopBottomPanel::bottom("info").show(ctx, |ui| {
+        egui::Panel::bottom("info").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 if self.is_pasted {
                     ui.label("Pasted Image");
@@ -278,13 +280,13 @@ impl eframe::App for app::PhotonApp {
         });
 
         if self.sidebar_open {
-            egui::SidePanel::left("sidebar")
+            egui::Panel::left("sidebar")
                 .resizable(true)
-                .min_width(200.0)
-                .show(ctx, |ui| {
+                .min_size(200.0)
+                .show_inside(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Sort:");
-                        egui::ComboBox::from_id_source("sort_mode")
+                        egui::ComboBox::from_id_salt("sort_mode")
                             .selected_text(self.settings.sort_mode.label())
                             .show_ui(ui, |ui| {
                                 let mut changed = false;
@@ -360,10 +362,10 @@ impl eframe::App for app::PhotonApp {
         }
 
         // 3. Central Workspace
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             if self.is_loading_dir {
                 self.ui_status_overlay(
-                    ctx,
+                    &ctx,
                     app::StatusOverlay::Loading("Loading Directory...".to_string()),
                 );
             } else {

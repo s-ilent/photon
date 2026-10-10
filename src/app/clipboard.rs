@@ -98,7 +98,7 @@ impl PhotonApp {
             };
 
             let img_data = arboard::ImageData {
-                width: final_width as usize,
+                width: final_width,
                 height: final_height,
                 bytes: final_rgba.into(),
             };

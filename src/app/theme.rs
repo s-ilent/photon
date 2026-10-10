@@ -10,7 +10,7 @@ impl PhotonApp {
         let purple = egui::Color32::from_rgb(189, 147, 249);
 
         visuals.widgets.noninteractive.bg_fill = bg_color;
-        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, fg_color);
+        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, fg_color);
         visuals.widgets.inactive.bg_fill = current_line;
         visuals.widgets.hovered.bg_fill = purple;
         visuals.window_fill = bg_color;

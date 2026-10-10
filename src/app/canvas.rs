@@ -355,7 +355,7 @@ impl PhotonApp {
             painter.rect_stroke(
                 sel,
                 0.0,
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(50, 150, 255)),
+                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(50, 150, 255)),
                 egui::StrokeKind::Outside,
             );
             painter.rect_filled(

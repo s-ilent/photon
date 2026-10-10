@@ -95,7 +95,7 @@ impl PhotonApp {
 
         // One dropdown entry per format so the user can pick by type.
         for (name, exts) in SAVE_FILTERS {
-            dialog = dialog.add_filter(*name, *exts);
+            dialog = dialog.add_filter(*name, exts);
         }
 
         if let Some(dir) = self.suggested_save_dir() {
@@ -176,7 +176,7 @@ fn encode_to_path(path: &PathBuf, rgba: &[u8], width: u32, height: u32) -> Resul
     // JPEG can't represent alpha; flatten RGBA → RGB (alpha discarded).
     if ext == "jpg" || ext == "jpeg" {
         let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
-        for chunk in rgba.chunks_exact(4) {
+        for chunk in rgba.as_chunks::<4>().0 {
             rgb.push(chunk[0]);
             rgb.push(chunk[1]);
             rgb.push(chunk[2]);
