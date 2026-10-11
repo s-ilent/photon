@@ -190,6 +190,8 @@ impl PhotonApp {
                     width,
                     height,
                     is_cubemap,
+                    decoded.format,
+                    decoded.color_space,
                 ));
                 let _upload_time = upload_start.elapsed();
 
@@ -710,6 +712,7 @@ mod tests {
                     width: *w,
                     height: *h,
                     is_cubemap: false,
+                    color_space: crate::image_loader::ColorSpace::Srgb,
                     layers: vec![crate::render::Layer { tiles: Vec::new() }],
                 }),
             );

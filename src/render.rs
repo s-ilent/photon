@@ -25,7 +25,9 @@ struct Globals {
     _pad0: [f32; 2],
     tint: [f32; 4],
     sharp: f32,
-    _pad1: [f32; 3],
+    /// 1.0 when the source bytes are linear-light, else 0.0.
+    linear_source: f32,
+    _pad1: [f32; 2],
 }
 
 /// Shared GPU state: pipeline and bind group layouts. Built once at startup
@@ -168,6 +170,9 @@ pub struct RenderImage {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) is_cubemap: bool,
+    /// The transfer function of the uploaded bytes; the shader encodes a
+    /// linear-light source to display space.
+    pub color_space: crate::image_loader::ColorSpace,
     pub(crate) layers: Vec<Layer>,
 }
 
@@ -310,6 +315,122 @@ pub(crate) fn build_layer(rgba: &[u8], width: u32, height: u32, ctx: &RenderCont
     Layer { tiles }
 }
 
+/// The non-sRGB wgpu variant of a BC layout. The source colour space is handled
+/// by the shader, so the sRGB texture formats are deliberately not used.
+fn bc_texture_format(kind: crate::image_loader::BcKind) -> wgpu::TextureFormat {
+    use crate::image_loader::BcKind;
+    match kind {
+        BcKind::Bc1 => wgpu::TextureFormat::Bc1RgbaUnorm,
+        BcKind::Bc2 => wgpu::TextureFormat::Bc2RgbaUnorm,
+        BcKind::Bc3 => wgpu::TextureFormat::Bc3RgbaUnorm,
+        BcKind::Bc4Unorm => wgpu::TextureFormat::Bc4RUnorm,
+        BcKind::Bc4Snorm => wgpu::TextureFormat::Bc4RSnorm,
+        BcKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
+        BcKind::Bc5Snorm => wgpu::TextureFormat::Bc5RgSnorm,
+        BcKind::Bc7 => wgpu::TextureFormat::Bc7RgbaUnorm,
+    }
+}
+
+/// GPU form of one still-compressed BC layer: a single texture holding the whole
+/// layer. A compressed stream cannot be sliced on a 4-texel block boundary, so
+/// there is no chunking — the caller only keeps BC bytes within the texture
+/// limit. The sampler stays linear.
+fn build_bc_layer(
+    bytes: &[u8],
+    width: u32,
+    height: u32,
+    kind: crate::image_loader::BcKind,
+    ctx: &RenderContext<'_>,
+) -> Layer {
+    let device = ctx.device;
+    let queue = ctx.queue;
+    let format = bc_texture_format(kind);
+    let block_size = format
+        .block_copy_size(None)
+        .expect("BC texture format has a block size");
+    let bytes_per_row = block_size * width.div_ceil(4);
+
+    let linear = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("photon_linear_sampler"),
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("photon_bc_texture"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: Default::default(),
+        },
+        bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            rows_per_image: None,
+            bytes_per_row: Some(bytes_per_row),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    let view = texture.create_view(&Default::default());
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("photon_bc_bind_group"),
+        layout: ctx.tile_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&linear),
+            },
+        ],
+    });
+
+    // One tile: the full-layer uv quad.
+    let vertices = [
+        Vertex { uv: [0.0, 0.0] },
+        Vertex { uv: [1.0, 0.0] },
+        Vertex { uv: [0.0, 1.0] },
+        Vertex { uv: [1.0, 0.0] },
+        Vertex { uv: [1.0, 1.0] },
+        Vertex { uv: [0.0, 1.0] },
+    ];
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("photon_bc_vertices"),
+        contents: bytemuck::cast_slice(&vertices),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+
+    Layer {
+        tiles: vec![Tile {
+            bind_group,
+            vertex_buffer,
+        }],
+    }
+}
+
 /// The device-side context the loader worker needs to build a RenderImage.
 pub(crate) struct RenderContext<'a> {
     pub(crate) device: &'a wgpu::Device,
@@ -322,19 +443,27 @@ pub(crate) struct RenderContext<'a> {
 /// needed). Called by the loader worker.
 pub(crate) fn build_render_image(
     ctx: &RenderContext<'_>,
-    layers_rgba: Vec<Vec<u8>>,
+    layers: Vec<Vec<u8>>,
     width: u32,
     height: u32,
     is_cubemap: bool,
+    format: crate::image_loader::DecodedFormat,
+    color_space: crate::image_loader::ColorSpace,
 ) -> RenderImage {
-    let layers = layers_rgba
+    let layers = layers
         .into_iter()
-        .map(|rgba| build_layer(&rgba, width, height, ctx))
+        .map(|bytes| match format {
+            crate::image_loader::DecodedFormat::Rgba8 => build_layer(&bytes, width, height, ctx),
+            crate::image_loader::DecodedFormat::Bc(kind) => {
+                build_bc_layer(&bytes, width, height, kind, ctx)
+            }
+        })
         .collect();
     RenderImage {
         width,
         height,
         is_cubemap,
+        color_space,
         layers,
     }
 }
@@ -397,7 +526,11 @@ impl egui_wgpu::CallbackTrait for DrawImageCallback {
             _pad0: [0.0; 2],
             tint: self.tint,
             sharp: self.sharp as u8 as f32,
-            _pad1: [0.0; 3],
+            linear_source: matches!(
+                self.image.color_space,
+                crate::image_loader::ColorSpace::Linear
+            ) as u8 as f32,
+            _pad1: [0.0; 2],
         };
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("photon_frame_globals"),
@@ -485,6 +618,8 @@ mod tests {
     #[test]
     fn globals_layout_has_no_implicit_padding() {
         assert_eq!(std::mem::size_of::<Globals>(), 64);
+        assert_eq!(std::mem::offset_of!(Globals, sharp), 48);
+        assert_eq!(std::mem::offset_of!(Globals, linear_source), 52);
         let g = Globals {
             viewport_px: [1.0, 2.0],
             viewport_size_px: [3.0, 4.0],
@@ -492,9 +627,23 @@ mod tests {
             _pad0: [0.0; 2],
             tint: [1.0; 4],
             sharp: 1.0,
-            _pad1: [0.0; 3],
+            linear_source: 1.0,
+            _pad1: [0.0; 2],
         };
         assert_eq!(bytemuck::bytes_of(&g).len(), 64);
+    }
+
+    #[test]
+    fn bc_texture_format_maps_to_non_srgb_variants() {
+        use crate::image_loader::BcKind;
+        assert_eq!(bc_texture_format(BcKind::Bc1), wgpu::TextureFormat::Bc1RgbaUnorm);
+        assert_eq!(bc_texture_format(BcKind::Bc2), wgpu::TextureFormat::Bc2RgbaUnorm);
+        assert_eq!(bc_texture_format(BcKind::Bc3), wgpu::TextureFormat::Bc3RgbaUnorm);
+        assert_eq!(bc_texture_format(BcKind::Bc4Unorm), wgpu::TextureFormat::Bc4RUnorm);
+        assert_eq!(bc_texture_format(BcKind::Bc4Snorm), wgpu::TextureFormat::Bc4RSnorm);
+        assert_eq!(bc_texture_format(BcKind::Bc5Unorm), wgpu::TextureFormat::Bc5RgUnorm);
+        assert_eq!(bc_texture_format(BcKind::Bc5Snorm), wgpu::TextureFormat::Bc5RgSnorm);
+        assert_eq!(bc_texture_format(BcKind::Bc7), wgpu::TextureFormat::Bc7RgbaUnorm);
     }
 }
 
@@ -517,14 +666,173 @@ mod gpu_tests {
         };
         let adapter = request(false).or_else(|_| request(true)).ok()?;
 
+        // Request BC support only when the adapter has it, so the other GPU
+        // tests still get a device and the BC test can skip cleanly.
+        let mut required_features = wgpu::Features::empty();
+        if adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+        {
+            required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
+        }
+
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("photon_gpu_test_device"),
-            required_features: wgpu::Features::empty(),
+            required_features,
             required_limits: wgpu::Limits::downlevel_defaults(),
             ..Default::default()
         }))
         .ok()?;
         Some((device, queue))
+    }
+
+    /// Render `image`'s layer 0 into a 4×4 `Rgba8Unorm` target and return the
+    /// tightly packed RGBA8 pixels. The image's own colour space drives the
+    /// shader's linear-source flag, matching `DrawImageCallback::prepare`.
+    fn draw_offscreen(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        state: &ImageRendererState,
+        image: &RenderImage,
+    ) -> [u8; 64] {
+        const SIZE: u32 = 4;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("photon_gpu_test_render_target"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+
+        let globals = Globals {
+            viewport_px: [0.0, 0.0],
+            viewport_size_px: [SIZE as f32, SIZE as f32],
+            screen_size_px: [SIZE as f32, SIZE as f32],
+            _pad0: [0.0; 2],
+            tint: [1.0; 4],
+            sharp: 0.0,
+            linear_source: matches!(
+                image.color_space,
+                crate::image_loader::ColorSpace::Linear
+            ) as u8 as f32,
+            _pad1: [0.0; 2],
+        };
+        let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("photon_gpu_test_globals"),
+            contents: bytemuck::bytes_of(&globals),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let globals_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("photon_gpu_test_globals_bg"),
+            layout: &state.globals_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals_buffer.as_entire_binding(),
+            }],
+        });
+
+        // copy_texture_to_buffer requires a 256-aligned row pitch; pad, then
+        // index with the aligned stride when reading pixels back.
+        const ALIGNED_BPR: u32 = 256;
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("photon_gpu_test_render_readback"),
+            size: (ALIGNED_BPR * SIZE) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("photon_gpu_test_render_encoder"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("photon_gpu_test_render_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&state.pipeline);
+            pass.set_bind_group(1, &globals_bind, &[]);
+            for tile in &image.layers[0].tiles {
+                pass.set_bind_group(0, &tile.bind_group, &[]);
+                pass.set_vertex_buffer(0, tile.vertex_buffer.slice(..));
+                pass.draw(0..6, 0..1);
+            }
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: Default::default(),
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(ALIGNED_BPR),
+                    rows_per_image: Some(SIZE),
+                },
+            },
+            wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(20)),
+            })
+            .expect("device poll failed");
+        rx.recv_timeout(Duration::from_secs(20))
+            .expect("buffer mapping timed out")
+            .expect("buffer mapping failed");
+
+        let pixels = {
+            let view = readback.slice(..).get_mapped_range();
+            view.to_vec()
+        };
+        readback.unmap();
+
+        // Strip the aligned row pitch so callers index the 4×4 image directly.
+        let mut out = [0u8; 64];
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                let i = (y * ALIGNED_BPR + x * 4) as usize;
+                let o = ((y * SIZE + x) * 4) as usize;
+                out[o..o + 4].copy_from_slice(&pixels[i..i + 4]);
+            }
+        }
+        out
     }
 
     /// `image.wgsl` compiles and the pipeline builds on a live device.
@@ -662,133 +970,19 @@ fn main() {
             tile_layout: &state.tile_layout,
             max_dim: 64,
         };
-        let image = build_render_image(&ctx, vec![rgba], 2, 2, false);
-
-        const SIZE: u32 = 4;
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("photon_gpu_test_render_target"),
-            size: wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = target.create_view(&Default::default());
-
-        let globals = Globals {
-            viewport_px: [0.0, 0.0],
-            viewport_size_px: [SIZE as f32, SIZE as f32],
-            screen_size_px: [SIZE as f32, SIZE as f32],
-            _pad0: [0.0; 2],
-            tint: [1.0; 4],
-            sharp: 0.0,
-            _pad1: [0.0; 3],
-        };
-        let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("photon_gpu_test_globals"),
-            contents: bytemuck::bytes_of(&globals),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let globals_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("photon_gpu_test_globals_bg"),
-            layout: &state.globals_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals_buffer.as_entire_binding(),
-            }],
-        });
-
-        // copy_texture_to_buffer requires a 256-aligned row pitch; pad, then
-        // index with the aligned stride when reading pixels back.
-        const ALIGNED_BPR: u32 = 256;
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("photon_gpu_test_render_readback"),
-            size: (ALIGNED_BPR * SIZE) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("photon_gpu_test_render_encoder"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("photon_gpu_test_render_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&state.pipeline);
-            pass.set_bind_group(1, &globals_bind, &[]);
-            for tile in &image.layers[0].tiles {
-                pass.set_bind_group(0, &tile.bind_group, &[]);
-                pass.set_vertex_buffer(0, tile.vertex_buffer.slice(..));
-                pass.draw(0..6, 0..1);
-            }
-        }
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &target,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: Default::default(),
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(ALIGNED_BPR),
-                    rows_per_image: Some(SIZE),
-                },
-            },
-            wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
-                depth_or_array_layers: 1,
-            },
+        let image = build_render_image(
+            &ctx,
+            vec![rgba],
+            2,
+            2,
+            false,
+            crate::image_loader::DecodedFormat::Rgba8,
+            crate::image_loader::ColorSpace::Srgb,
         );
-        queue.submit(Some(encoder.finish()));
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        readback
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result);
-            });
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(Duration::from_secs(20)),
-            })
-            .expect("device poll failed");
-        rx.recv_timeout(Duration::from_secs(20))
-            .expect("buffer mapping timed out")
-            .expect("buffer mapping failed");
-
-        let pixels = {
-            let view = readback.slice(..).get_mapped_range();
-            view.to_vec()
-        };
-        readback.unmap();
-
+        let pixels = draw_offscreen(&device, &queue, &state, &image);
         let px = |x: u32, y: u32| -> [u8; 4] {
-            let i = (y * ALIGNED_BPR + x * 4) as usize;
+            let i = ((y * 4 + x) * 4) as usize;
             [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
         };
         // Top-left quadrant samples source texel (0,0) = red; bottom-right (1,1)
@@ -802,6 +996,56 @@ fn main() {
             px(3, 3)[0] > 200 && px(3, 3)[1] > 200 && px(3, 3)[2] > 200,
             "bottom-right should be white, got {:?}",
             px(3, 3)
+        );
+    }
+
+    /// A BC1 layer uploads to a compressed texture and decodes to red.
+    #[test]
+    fn bc1_texture_uploads_and_samples() {
+        let Some((device, queue)) = headless_device() else {
+            eprintln!("no GPU adapter; skipping bc1_texture_uploads_and_samples");
+            return;
+        };
+        if !device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+        {
+            eprintln!("no BC texture support; skipping bc1_texture_uploads_and_samples");
+            return;
+        }
+        use crate::image_loader::{BcKind, ColorSpace, DecodedFormat};
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let state = ImageRendererState::new(&device, format);
+
+        // One 4x4 BC1 block: color0 = 0xF800 (red), color1 = 0x0000, all index
+        // bits 0, so every texel decodes to pure red.
+        let block: Vec<u8> = vec![0x00, 0xF8, 0x00, 0x00, 0, 0, 0, 0];
+        let ctx = RenderContext {
+            device: &device,
+            queue: &queue,
+            tile_layout: &state.tile_layout,
+            max_dim: 64,
+        };
+        let image = build_render_image(
+            &ctx,
+            vec![block],
+            4,
+            4,
+            false,
+            DecodedFormat::Bc(BcKind::Bc1),
+            ColorSpace::Linear,
+        );
+
+        let pixels = draw_offscreen(&device, &queue, &state, &image);
+        let px = |x: u32, y: u32| -> [u8; 4] {
+            let i = ((y * 4 + x) * 4) as usize;
+            [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+        };
+        let c = px(1, 1);
+        assert!(
+            c[0] > 200 && c[1] < 60 && c[2] < 60,
+            "BC1 texel should be red, got {c:?}"
         );
     }
 }
