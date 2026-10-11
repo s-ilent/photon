@@ -1,0 +1,63 @@
+use crate::app;
+use eframe::egui;
+
+impl app::PhotonApp {
+    pub(crate) fn ui_settings_window(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Settings")
+            .open(&mut self.settings_open)
+            .show(ctx, |ui| {
+                ui.checkbox(
+                    &mut self.settings.scale_to_fit,
+                    "Scale to fit when switching images",
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Reset zoom:");
+                    egui::ComboBox::from_id_salt("zoom_reset")
+                        .selected_text(self.settings.zoom_reset.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                app::ZoomReset::Always,
+                                app::ZoomReset::DimensionChange,
+                                app::ZoomReset::Never,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.settings.zoom_reset,
+                                    mode,
+                                    mode.label(),
+                                );
+                            }
+                        });
+                });
+                // Sharp (pixel) scaling is a shader-pass feature; the
+                // toggle persists but has no effect until then.
+                ui.checkbox(
+                    &mut self.settings.use_sharp_scaling,
+                    "Use Sharp (Pixel) Scaling",
+                );
+                ui.checkbox(
+                    &mut self.settings.checkerboard_bg,
+                    "Checkerboard background",
+                );
+
+                ui.separator();
+                ui.label("Font Size");
+                ui.add(egui::Slider::new(&mut self.settings.font_size, 10.0..=60.0));
+                if self.settings.font_size != self.last_font_size {
+                    self.last_font_size = self.settings.font_size;
+                    if self.settings.dark_mode {
+                        app::PhotonApp::setup_dracula_theme(ctx, self.settings.font_size);
+                    }
+                }
+
+                ui.separator();
+                if ui.button("Cycle Theme").clicked() {
+                    self.settings.dark_mode = !self.settings.dark_mode;
+                    if self.settings.dark_mode {
+                        app::PhotonApp::setup_dracula_theme(ctx, self.settings.font_size);
+                    } else {
+                        app::PhotonApp::setup_light_theme(ctx);
+                    }
+                }
+            });
+    }
+}
