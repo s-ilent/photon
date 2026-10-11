@@ -8,15 +8,75 @@ use ::image::ImageDecoder;
 /// Cubemaps (6 faces) are nowhere near this.
 const MAX_DECODED_LAYERS: u32 = 64;
 
-/// Decoded pixels of an image file: one RGBA8 buffer per layer (cubemap face
-/// or texture-array entry), all sharing `width`/`height`. Ordinary images
-/// have exactly one layer.
+/// The transfer function of an image's stored bytes.
+///
+/// A property of the *image*, not of any one codec, so EXR/HDR/RAW (linear-light)
+/// and future ICC work read the same field. Photon's canvas is a display/gamma
+/// pass (matching egui's non-sRGB target), so a `Srgb` image is drawn as-is and a
+/// `Linear` one is encoded to display space in the fragment shader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorSpace {
+    /// Bytes are already display-encoded (sRGB); drawn as-is.
+    Srgb,
+    /// Linear-light data; the shader encodes it for display.
+    Linear,
+}
+
+/// Block-compressed layouts kept compressed for direct GPU upload (mip 0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BcKind {
+    Bc1,
+    Bc2,
+    Bc3,
+    Bc4Unorm,
+    Bc4Snorm,
+    Bc5Unorm,
+    Bc5Snorm,
+    Bc7,
+}
+
+/// How the bytes in [`DecodedImage::layers`] are stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodedFormat {
+    /// 8-bit RGBA, `width * height * 4` bytes per layer.
+    Rgba8,
+    /// Block-compressed BC1–BC7, uploaded to a matching wgpu BC texture.
+    Bc(BcKind),
+}
+
+/// Decode-time capabilities. `allow_bc` requests keeping BC-compressed DDS
+/// surfaces compressed; `max_dim` is the GPU's per-texture limit, above which a
+/// compressed image falls back to the CPU path so it can be chunked.
+#[derive(Debug, Clone, Copy)]
+pub struct DecodeOptions {
+    pub allow_bc: bool,
+    pub max_dim: u32,
+}
+
+impl DecodeOptions {
+    /// Always decode to RGBA8 — the batch/clipboard/save callers need pixels.
+    pub fn cpu() -> Self {
+        Self {
+            allow_bc: false,
+            max_dim: u32::MAX,
+        }
+    }
+}
+
+/// Decoded pixels of an image file: one buffer per layer (cubemap face or
+/// texture-array entry), all sharing `width`/`height`. Ordinary images have
+/// exactly one layer. The buffer layout is [`DecodedImage::format`] — RGBA8, or
+/// still-block-compressed BC bytes for a DDS loaded with [`DecodeOptions::allow_bc`].
 pub struct DecodedImage {
     pub layers: Vec<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     /// True when the layers are cubemap faces (drives face labels in the UI).
     pub is_cubemap: bool,
+    /// How the bytes in `layers` are stored (RGBA8 or a BC layout).
+    pub format: DecodedFormat,
+    /// The transfer function of the stored bytes; see [`ColorSpace`].
+    pub color_space: ColorSpace,
 }
 
 /// Typed decode failure, replacing the old `Result<_, String>` + string-prefix
@@ -99,13 +159,21 @@ impl std::error::Error for DecodeError {}
 /// reported dimensions reflect the rotation. Formats without Exif (or with a
 /// broken Exif block) decode unrotated.
 pub fn load_image(path: &Path) -> Result<DecodedImage, DecodeError> {
+    load_image_opts(path, DecodeOptions::cpu())
+}
+
+/// [`load_image`] with decode capabilities: when `opts.allow_bc` is set and the
+/// file is a BC-compressed DDS within `opts.max_dim`, the layers come back still
+/// compressed ([`DecodedFormat::Bc`]) for a direct GPU upload. Every other path
+/// (and all non-DDS formats) yields RGBA8 exactly as [`load_image`] does.
+pub fn load_image_opts(path: &Path, opts: DecodeOptions) -> Result<DecodedImage, DecodeError> {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase());
 
     if extension.as_deref() == Some("dds") {
-        return load_dds(path);
+        return load_dds(path, opts);
     }
 
     let file = std::fs::File::open(path).map_err(|e| DecodeError::FileNotFound(e.to_string()))?;
@@ -136,7 +204,18 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, DecodeError> {
         width: w,
         height: h,
         is_cubemap: false,
+        format: DecodedFormat::Rgba8,
+        color_space: color_space_for_extension(extension.as_deref()),
     })
+}
+
+/// The colour space an `image`-crate format carries. Radiance HDR and OpenEXR
+/// are linear-light; every other format Photon reads is display-encoded sRGB.
+fn color_space_for_extension(extension: Option<&str>) -> ColorSpace {
+    match extension {
+        Some("exr") | Some("hdr") => ColorSpace::Linear,
+        _ => ColorSpace::Srgb,
+    }
 }
 
 /// Decode a `.dds` file via `image_dds`. Covers DXT1–DXT5, BC4, BC5 (ATI2/BC5U),
@@ -146,12 +225,43 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, DecodeError> {
 /// Every layer (cubemap face or array entry) is decoded; the layers are
 /// stacked vertically inside the file by `image_dds`, so we split the stack
 /// back into per-face buffers here.
-fn load_dds(path: &Path) -> Result<DecodedImage, DecodeError> {
+fn load_dds(path: &Path, opts: DecodeOptions) -> Result<DecodedImage, DecodeError> {
     let file = std::fs::File::open(path).map_err(|e| DecodeError::FileNotFound(e.to_string()))?;
     let dds = image_dds::ddsfile::Dds::read(file)
         .map_err(|e| DecodeError::InvalidData(format!("Failed to read DDS header: {}", e)))?;
 
     let layer_count = dds_layer_count(&dds).min(MAX_DECODED_LAYERS);
+    let (w, h) = (dds.get_width(), dds.get_height());
+    let is_cubemap = dds_is_cubemap(&dds);
+    let color_space = dds_color_space(&dds);
+
+    // Native path: keep the compressed mip-0 surfaces for direct GPU upload when
+    // the format is a supported BC layout, the caller allows it, and the image
+    // fits one texture. Chunking can't slice a compressed stream on a block
+    // boundary, so anything over the limit falls through to the CPU path.
+    if opts.allow_bc && w > 0 && h > 0 && w <= opts.max_dim && h <= opts.max_dim {
+        if let Some(kind) = dds.get_dxgi_format().and_then(dxgi_bc_kind) {
+            let surface = image_dds::Surface::from_dds(&dds)
+                .map_err(|e| DecodeError::InvalidData(format!("DDS surface error: {}", e)))?;
+            let mut layers = Vec::with_capacity(layer_count as usize);
+            for layer in 0..layer_count {
+                let data = surface.get(layer, 0, 0).ok_or_else(|| {
+                    DecodeError::InvalidData(format!("DDS layer {} mip 0 missing", layer))
+                })?;
+                layers.push(data.to_vec());
+            }
+            return Ok(DecodedImage {
+                layers,
+                width: w,
+                height: h,
+                is_cubemap,
+                format: DecodedFormat::Bc(kind),
+                color_space,
+            });
+        }
+    }
+
+    // CPU fallback: decode every layer's mip 0 to RGBA8.
     let img = image_dds::SurfaceRgba8::decode_layers_mipmaps_dds(&dds, 0..layer_count, 0..1)
         .map_err(|e| DecodeError::InvalidData(format!("DDS decode failed: {}", e)))?
         .into_image()
@@ -159,7 +269,6 @@ fn load_dds(path: &Path) -> Result<DecodedImage, DecodeError> {
 
     // The decoded image stacks all layers vertically, so its reported height
     // is count × face-height; the true per-layer dimensions are in the header.
-    let (w, h) = (dds.get_width(), dds.get_height());
     let layer_bytes = (w as usize) * (h as usize) * 4;
     let raw = img.into_raw();
     if layer_bytes == 0 || raw.len() % layer_bytes != 0 {
@@ -176,7 +285,44 @@ fn load_dds(path: &Path) -> Result<DecodedImage, DecodeError> {
         layers,
         width: w,
         height: h,
-        is_cubemap: dds_is_cubemap(&dds),
+        is_cubemap,
+        format: DecodedFormat::Rgba8,
+        color_space,
+    })
+}
+
+/// The colour space of a DDS's stored bytes: an `*_sRGB` DXGI format (which the
+/// legacy DXT FourCCs map to) is display-encoded; everything else — non-sRGB BC,
+/// uncompressed UNORM, float — is treated as linear-light.
+fn dds_color_space(dds: &image_dds::ddsfile::Dds) -> ColorSpace {
+    match dds.get_dxgi_format() {
+        Some(f) if is_srgb_dxgi(f) => ColorSpace::Srgb,
+        _ => ColorSpace::Linear,
+    }
+}
+
+fn is_srgb_dxgi(format: image_dds::ddsfile::DxgiFormat) -> bool {
+    use image_dds::ddsfile::DxgiFormat::*;
+    matches!(
+        format,
+        BC1_UNorm_sRGB | BC2_UNorm_sRGB | BC3_UNorm_sRGB | BC7_UNorm_sRGB
+    )
+}
+
+/// Map a DXGI format to the BC layout we can upload directly. `Bc6h`/float and
+/// typeless formats return `None` (they fall back to the CPU decode).
+fn dxgi_bc_kind(format: image_dds::ddsfile::DxgiFormat) -> Option<BcKind> {
+    use image_dds::ddsfile::DxgiFormat::*;
+    Some(match format {
+        BC1_UNorm | BC1_UNorm_sRGB => BcKind::Bc1,
+        BC2_UNorm | BC2_UNorm_sRGB => BcKind::Bc2,
+        BC3_UNorm | BC3_UNorm_sRGB => BcKind::Bc3,
+        BC4_UNorm => BcKind::Bc4Unorm,
+        BC4_SNorm => BcKind::Bc4Snorm,
+        BC5_UNorm => BcKind::Bc5Unorm,
+        BC5_SNorm => BcKind::Bc5Snorm,
+        BC7_UNorm | BC7_UNorm_sRGB => BcKind::Bc7,
+        _ => return None,
     })
 }
 
@@ -493,5 +639,45 @@ mod tests {
         for e in &other_errors {
             assert!(!e.is_unsupported_format(), "{e:?} is not a format error");
         }
+    }
+
+    #[test]
+    fn color_space_is_srgb_except_hdr_formats() {
+        assert_eq!(color_space_for_extension(Some("png")), ColorSpace::Srgb);
+        assert_eq!(color_space_for_extension(Some("jpg")), ColorSpace::Srgb);
+        assert_eq!(color_space_for_extension(Some("jpeg")), ColorSpace::Srgb);
+        assert_eq!(color_space_for_extension(Some("dds")), ColorSpace::Srgb);
+        assert_eq!(color_space_for_extension(Some("exr")), ColorSpace::Linear);
+        assert_eq!(color_space_for_extension(Some("hdr")), ColorSpace::Linear);
+        assert_eq!(color_space_for_extension(None), ColorSpace::Srgb);
+    }
+
+    #[test]
+    fn dxgi_bc_kind_maps_the_uploadable_layouts() {
+        use image_dds::ddsfile::DxgiFormat::*;
+        assert_eq!(dxgi_bc_kind(BC1_UNorm), Some(BcKind::Bc1));
+        assert_eq!(dxgi_bc_kind(BC1_UNorm_sRGB), Some(BcKind::Bc1));
+        assert_eq!(dxgi_bc_kind(BC2_UNorm_sRGB), Some(BcKind::Bc2));
+        assert_eq!(dxgi_bc_kind(BC3_UNorm), Some(BcKind::Bc3));
+        assert_eq!(dxgi_bc_kind(BC4_UNorm), Some(BcKind::Bc4Unorm));
+        assert_eq!(dxgi_bc_kind(BC4_SNorm), Some(BcKind::Bc4Snorm));
+        assert_eq!(dxgi_bc_kind(BC5_UNorm), Some(BcKind::Bc5Unorm));
+        assert_eq!(dxgi_bc_kind(BC5_SNorm), Some(BcKind::Bc5Snorm));
+        assert_eq!(dxgi_bc_kind(BC7_UNorm_sRGB), Some(BcKind::Bc7));
+        // Float and typeless layouts are not uploadable; they fall back to CPU.
+        assert_eq!(dxgi_bc_kind(BC6H_UF16), None);
+        assert_eq!(dxgi_bc_kind(BC6H_SF16), None);
+        assert_eq!(dxgi_bc_kind(R8G8B8A8_UNorm), None);
+    }
+
+    #[test]
+    fn is_srgb_dxgi_flags_only_the_srgb_variants() {
+        use image_dds::ddsfile::DxgiFormat::*;
+        assert!(is_srgb_dxgi(BC1_UNorm_sRGB));
+        assert!(is_srgb_dxgi(BC3_UNorm_sRGB));
+        assert!(is_srgb_dxgi(BC7_UNorm_sRGB));
+        assert!(!is_srgb_dxgi(BC1_UNorm));
+        assert!(!is_srgb_dxgi(BC5_UNorm));
+        assert!(!is_srgb_dxgi(R8G8B8A8_UNorm));
     }
 }

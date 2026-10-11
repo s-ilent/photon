@@ -96,12 +96,26 @@ impl PhotonApp {
 
                 // Process request
                 let start_total = Instant::now();
+                let max_dim_limit = device.limits().max_texture_dimension_2d;
 
                 let (decoded, path_for_tx, rgba_for_res, is_active_load) = match msg_to_process {
                     Some(WorkerMessage::Load(ref req)) => {
-                        match crate::image_loader::load_image(&req.path) {
+                        let opts = crate::image_loader::DecodeOptions {
+                            // BC upload is enabled in the device-feature step; the
+                            // seam is in place but the render path is not yet
+                            // format-aware, so keep the CPU decode for now.
+                            allow_bc: false,
+                            max_dim: max_dim_limit,
+                        };
+                        match crate::image_loader::load_image_opts(&req.path, opts) {
                             Ok(decoded) => {
                                 let active = req.priority == Priority::Active;
+                                log::debug!(
+                                    "decoded {:?}: format {:?}, colour space {:?}",
+                                    req.path.file_name(),
+                                    decoded.format,
+                                    decoded.color_space
+                                );
                                 (decoded, Some(req.path.clone()), None, active)
                             }
                             Err(e) => {
@@ -131,6 +145,9 @@ impl PhotonApp {
                             width,
                             height,
                             is_cubemap: false,
+                            // Clipboard images arrive as 8-bit sRGB bytes.
+                            format: crate::image_loader::DecodedFormat::Rgba8,
+                            color_space: crate::image_loader::ColorSpace::Srgb,
                         },
                         None,
                         Some(vec![rgba]),
@@ -145,7 +162,7 @@ impl PhotonApp {
                 // Images larger than the GPU's per-texture limit are chunked
                 // into tiles here and reassembled by the render pass, so the
                 // old oversized rejection only needs to cover zero extents.
-                let max_dim = device.limits().max_texture_dimension_2d;
+                let max_dim = max_dim_limit;
                 if width == 0 || height == 0 {
                     let reason = format!("Image has zero extent ({}x{})", width, height);
                     log::warn!("Failed to load image {:?}: {}", path_for_tx, reason);
