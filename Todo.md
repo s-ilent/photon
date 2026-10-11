@@ -81,9 +81,12 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
       `kamadak-exif` (also feeds the metadata panel).
 - [ ] **Fit modes + zoom set** (`Roadmap.md` §3) — don't-fit / reduce-only /
       always-fit, fit-window per axis + centre, zoom 100 % / to-desktop / lock.
-      Pure geometry landed in `app/view.rs` (`FitMode`, `fit_zoom`,
-      `zoom_to_fill`, `ZoomLock`, 2026-10-11); remaining is canvas + Settings
-      wiring, and fit-window-per-axis/centre still to build.
+      Fit + zoom limits are WIRED (2026-10-11): `app/view.rs` `fit_zoom` drives
+      the canvas fit and `zoom_limits` the wheel zoom, so a 100k-px panorama can
+      zoom out to fit and a 24-px icon in to fill (the old fixed 0.1–50 clamps
+      are gone). Remaining: a fit-mode Setting (DontFit/AlwaysFit — the enum is
+      ready), fit-window-per-axis + centre, zoom 100 %/to-desktop buttons, and
+      wiring `ZoomLock`.
 - [ ] **Status-bar pixel readout** (`Roadmap.md` §3) — RGB / alpha / HTML hex
       under the cursor.
 - [ ] **Content-based format detection** (`Roadmap.md` §5) — sniff bytes,

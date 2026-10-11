@@ -1,14 +1,22 @@
 //! Fit/zoom geometry for the image canvas (Roadmap.md §3).
 //!
 //! Pure functions over viewport and image sizes — no egui context, no state.
-//! Wired into `app/canvas.rs` and the Settings UI in a follow-up step.
+//! `fit_zoom` and `zoom_limits` are live in `app/canvas.rs`; `zoom_percent_label`
+//! in the info bar. `FitMode`'s non-default variants and `ZoomLock` await the
+//! Settings UI (fit-mode choice / lock-zoom).
 
 use eframe::egui;
 
-/// Lower bound of the interactive zoom range.
-pub(crate) const ZOOM_MIN: f32 = 0.1;
-/// Upper bound of the interactive zoom range.
-pub(crate) const ZOOM_MAX: f32 = 50.0;
+/// Cap on magnification, expressed as screen pixels per image pixel: zooming in
+/// never lets one image pixel span more than this, so a hairline cannot be
+/// smeared into soup. Independent of image size, so a tiny image can still be
+/// blown up until it fills the viewport (see [`zoom_limits`]).
+pub(crate) const MAX_SCREEN_PX_PER_IMAGE_PX: f32 = 32.0;
+
+/// How far below "fits the window" the user may zoom out, as a fraction of the
+/// fit zoom. There is no absolute floor: a 100k-pixel panorama fits at ~0.02
+/// zoom, and the limit scales down with it rather than pinning at 10%.
+pub(crate) const MIN_FIT_FRACTION: f32 = 0.25;
 
 /// How an image is fitted to the available work area when it loads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -49,20 +57,41 @@ pub(crate) fn fit_zoom(available: egui::Vec2, image: egui::Vec2, mode: FitMode) 
     }
 }
 
-/// Clamp `z` into the interactive zoom range.
-pub(crate) fn clamp_zoom(z: f32) -> f32 {
-    z.clamp(ZOOM_MIN, ZOOM_MAX)
-}
-
-/// Zoom that fills the work area: the larger of the two axis scales, clamped.
+/// Zoom that fills the work area: the larger of the two axis scales, so one
+/// axis touches the viewport and the other overflows (panning covers it).
 ///
-/// Used by "zoom to desktop / fit window" commands, which enlarge a small image
-/// until one axis touches the viewport (the other overflows, panning covers it).
+/// Used by "zoom to desktop / fit window" and to derive the upper zoom limit.
+/// Unclamped by image size — a 24px icon legitimately needs ~100× to fill a
+/// 4K display. Degenerate sizes fall back to `1.0`.
 pub(crate) fn zoom_to_fill(available: egui::Vec2, image: egui::Vec2) -> f32 {
     if available.x <= 0.0 || available.y <= 0.0 || image.x <= 0.0 || image.y <= 0.0 {
         return 1.0;
     }
-    clamp_zoom((available.x / image.x).max(available.y / image.y))
+    (available.x / image.x).max(available.y / image.y)
+}
+
+/// The interactive `(min, max)` zoom range for this image and viewport.
+///
+/// Both bounds are derived from the image size, not fixed constants:
+/// - `min` is a fraction below the fit zoom, so "fits the window" is always
+///   attainable however huge the image (and the first wheel tick after a fit
+///   never jumps).
+/// - `max` is at least the fill zoom, so a tiny image can always fill the
+///   screen, and otherwise caps magnification at [`MAX_SCREEN_PX_PER_IMAGE_PX`].
+pub(crate) fn zoom_limits(available: egui::Vec2, image: egui::Vec2) -> (f32, f32) {
+    let min = fit_zoom(available, image, FitMode::ReduceOnly) * MIN_FIT_FRACTION;
+    let max = zoom_to_fill(available, image).max(MAX_SCREEN_PX_PER_IMAGE_PX);
+    // Never hand out an inverted range (degenerate sizes are handled by the
+    // fallbacks above, but be defensive: `f32::clamp` panics if min > max).
+    (min.min(max), max.max(min))
+}
+
+/// Clamp `z` into a `(min, max)` range from [`zoom_limits`]. Tolerates an
+/// inverted range rather than panicking in `f32::clamp`.
+pub(crate) fn clamp_to_limits(z: f32, limits: (f32, f32)) -> f32 {
+    let (min, max) = limits;
+    let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+    z.clamp(lo, hi)
 }
 
 /// Human-readable zoom percentage, e.g. `100%`.
@@ -182,15 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn clamp_zoom_bounds() {
-        assert_eq!(clamp_zoom(0.01), ZOOM_MIN);
-        assert_eq!(clamp_zoom(100.0), ZOOM_MAX);
-        assert_eq!(clamp_zoom(1.0), 1.0);
-        assert_eq!(clamp_zoom(ZOOM_MIN), ZOOM_MIN);
-        assert_eq!(clamp_zoom(ZOOM_MAX), ZOOM_MAX);
-    }
-
-    #[test]
     fn zoom_to_fill_picks_the_larger_scale() {
         // 50x25 into 100x100: axis scales 2.0 and 4.0 -> 4.0.
         assert_eq!(zoom_to_fill(v(100.0, 100.0), v(50.0, 25.0)), 4.0);
@@ -201,11 +221,49 @@ mod tests {
     }
 
     #[test]
-    fn zoom_to_fill_is_clamped_and_guarded() {
-        // Extreme upscale clamps to ZOOM_MAX.
-        assert_eq!(zoom_to_fill(v(100.0, 100.0), v(1.0, 1.0)), ZOOM_MAX);
+    fn zoom_to_fill_is_unclamped_and_guarded() {
+        // A 1x1 image in a 100x100 area needs 100x — not clipped to 50.
+        assert_eq!(zoom_to_fill(v(100.0, 100.0), v(1.0, 1.0)), 100.0);
         assert_eq!(zoom_to_fill(v(0.0, 100.0), v(50.0, 50.0)), 1.0);
         assert_eq!(zoom_to_fill(v(100.0, 100.0), v(0.0, 0.0)), 1.0);
+    }
+
+    #[test]
+    fn huge_image_can_be_zoomed_out_to_fit() {
+        // 100k-wide panorama in a 1920x1080 viewport.
+        let (min, max) = zoom_limits(v(1920.0, 1080.0), v(100_000.0, 1000.0));
+        let fit = fit_zoom(v(1920.0, 1080.0), v(100_000.0, 1000.0), FitMode::ReduceOnly);
+        // The old fixed floor was 0.1; fit here is ~0.019 and must be reachable.
+        assert!(fit < 0.1, "fit zoom should be below the old floor");
+        assert!(min <= fit, "fit must be within the limits (min {min}, fit {fit})");
+        assert!(max >= MAX_SCREEN_PX_PER_IMAGE_PX);
+    }
+
+    #[test]
+    fn tiny_image_can_be_zoomed_in_to_fill() {
+        // 24px icon on a 2560x1440 display needs ~106x to fill.
+        let (min, max) = zoom_limits(v(2560.0, 1440.0), v(24.0, 24.0));
+        let fill = zoom_to_fill(v(2560.0, 1440.0), v(24.0, 24.0));
+        assert!(fill > 100.0);
+        assert!(max >= fill, "fill must be reachable (max {max}, fill {fill})");
+        assert!(min <= 1.0);
+    }
+
+    #[test]
+    fn limits_guards_degenerate_sizes() {
+        let (min, max) = zoom_limits(v(0.0, 100.0), v(50.0, 50.0));
+        assert!(min.is_finite() && max.is_finite());
+        assert!(min <= max);
+    }
+
+    #[test]
+    fn clamp_to_limits_bounds() {
+        let limits = (0.25, 4.0);
+        assert_eq!(clamp_to_limits(0.01, limits), 0.25);
+        assert_eq!(clamp_to_limits(100.0, limits), 4.0);
+        assert_eq!(clamp_to_limits(1.0, limits), 1.0);
+        // Inverted range does not panic.
+        assert_eq!(clamp_to_limits(1.0, (4.0, 0.25)), 1.0);
     }
 
     #[test]
@@ -213,7 +271,7 @@ mod tests {
         assert_eq!(zoom_percent_label(1.0), "100%");
         assert_eq!(zoom_percent_label(0.5), "50%");
         assert_eq!(zoom_percent_label(2.0), "200%");
-        assert_eq!(zoom_percent_label(ZOOM_MIN), "10%");
+        assert_eq!(zoom_percent_label(0.1), "10%");
     }
 
     #[test]

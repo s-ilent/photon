@@ -87,7 +87,7 @@ src/
 └── app/
     ├── loader.rs        # Worker thread (decode + GPU tile upload), LRU texture cache, speculative neighbor preload, directory load + watcher, sorting.
     ├── canvas.rs        # Image workspace: zoom/pan/selection drawing, checkerboard background, input handling per mouse mode.
-    ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, fit_zoom, zoom_to_fill, ZoomLock. Pure functions; not yet wired into canvas/UI.
+    ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, fit_zoom, zoom_limits (adaptive, image-derived), zoom_to_fill, ZoomLock. fit_zoom/zoom_limits wired into canvas, zoom_percent_label into the info bar; fit-mode choice + zoom lock await the Settings UI.
     ├── clipboard.rs     # Copy (with optional crop from selection) and paste via arboard; current_rgba() source of truth for displayed bytes.
     ├── config.rs        # Settings persistence: config.ron via serde + RON, config dir via the directories crate.
     ├── saver.rs         # Save / Save Selection As: rfd save-as dialog, background encode, bottom-bar status feedback.

@@ -18,10 +18,12 @@ mod config;
 mod loader;
 mod saver;
 mod theme;
-// Fit/zoom geometry (Roadmap.md §3). Temporary `allow`: the pure functions
-// land here first; the canvas/UI wiring is a follow-up integration step.
+// Fit/zoom geometry (Roadmap.md §3). `fit_zoom`/`zoom_limits` are wired into
+// the canvas and `zoom_percent_label` into the info bar; the remaining
+// primitives (FitMode's non-default variants, ZoomLock) await the Settings UI,
+// hence the temporary `allow`.
 #[allow(dead_code)]
-mod view;
+pub(crate) mod view;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Priority {

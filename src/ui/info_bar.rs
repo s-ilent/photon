@@ -19,7 +19,10 @@ impl app::PhotonApp {
                 ui.label(format!("{}x{}", w, h));
                 ui.separator();
             }
-            ui.label(format!("Zoom: {:.0}%", self.zoom * 100.0));
+            ui.label(format!(
+                "Zoom: {}",
+                app::view::zoom_percent_label(self.zoom)
+            ));
 
             if let Some(status) = &self.save_status {
                 if std::time::Instant::now() < status.expires {

@@ -1,3 +1,4 @@
+use crate::app::view;
 use crate::app::{MouseMode, PhotonApp, StatusOverlay};
 use eframe::egui;
 
@@ -43,10 +44,14 @@ impl PhotonApp {
         let texture_size = egui::vec2(img_w as f32, img_h as f32);
 
         if self.needs_fit {
-            let available = response.rect.size();
-            let scale_x = available.x / texture_size.x;
-            let scale_y = available.y / texture_size.y;
-            self.zoom = f32::min(scale_x, scale_y).min(1.0); // Don't scale up past 100%
+            // Reduce-only fit: shrink a too-large image to the window, never
+            // upscale past 100%. (A user-selectable fit mode is a later step;
+            // `view::FitMode` already models the alternatives.)
+            self.zoom = view::fit_zoom(
+                response.rect.size(),
+                texture_size,
+                view::FitMode::ReduceOnly,
+            );
             self.pan = egui::Vec2::ZERO;
             self.needs_fit = false;
         }
@@ -139,9 +144,14 @@ impl PhotonApp {
                 }
             } else {
                 let old_zoom = self.zoom;
-                // Use smoother log-scale zoom
+                // Use smoother log-scale zoom. Limits are derived from the
+                // image/viewport, not fixed: a giant image can zoom out to
+                // fit, a tiny one up to fill the screen (see `view`).
                 let zoom_delta = scroll_delta * 0.005;
-                let new_zoom = (self.zoom * (1.0 + zoom_delta)).clamp(0.1, 50.0);
+                let new_zoom = view::clamp_to_limits(
+                    self.zoom * (1.0 + zoom_delta),
+                    view::zoom_limits(response.rect.size(), texture_size),
+                );
 
                 // Adjust pan so the image scales around the mouse cursor or center
                 let zoom_center = ui
