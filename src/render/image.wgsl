@@ -5,7 +5,8 @@ struct Globals {
     viewport_size_px: vec2<f32>,
     screen_size_px: vec2<f32>,
     tint: vec4<f32>,
-    sharp: f32, // > 0.5 = pixel-sharp
+    sharp: f32,         // > 0.5 = pixel-sharp
+    linear_source: f32, // > 0.5 = linear-light source
 };
 
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -40,10 +41,25 @@ fn sharp_sample_uv(uv: vec2<f32>) -> vec2<f32> {
     return (floor(coord) + vec2<f32>(0.5) + tx_offset) * inv_size;
 }
 
+// Linear-light -> display sRGB encode, mirroring egui's gamma_from_linear_rgb.
+// max() guards pow() because both select arms evaluate.
+fn gamma_from_linear_rgb(rgb: vec3<f32>) -> vec3<f32> {
+    let hi = 1.055 * pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    let lo = rgb * 12.92;
+    return select(hi, lo, rgb <= vec3<f32>(0.0031308));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // `select` evaluates both arms, so the derivative in `sharp_sample_uv`
     // always runs in uniform control flow.
     let uv = select(in.uv, sharp_sample_uv(in.uv), globals.sharp > 0.5);
-    return textureSample(tex, linear_sampler, uv) * globals.tint;
+    let sampled = textureSample(tex, linear_sampler, uv);
+    // Encode a linear-light source to display space before tinting; tint stays
+    // in display space to match egui's gamma-space pass. Alpha is not encoded.
+    var rgb = sampled.rgb;
+    if globals.linear_source > 0.5 {
+        rgb = gamma_from_linear_rgb(rgb);
+    }
+    return vec4<f32>(rgb * globals.tint.rgb, sampled.a * globals.tint.a);
 }

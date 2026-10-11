@@ -429,6 +429,8 @@ impl PhotonApp {
                 width,
                 height,
                 false,
+                crate::image_loader::DecodedFormat::Rgba8,
+                crate::image_loader::ColorSpace::Srgb,
             ))
         };
 
