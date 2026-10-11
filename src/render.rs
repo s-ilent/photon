@@ -1,19 +1,6 @@
-//! The image canvas render pass: draws the displayed image through a custom
-//! wgpu pipeline inside egui's frame (via `egui_wgpu::CallbackTrait`).
-//!
-//! Why a custom pass: sharp (pixel) sampling is a shader decision, not a
-//! sampler switch, and images larger than the GPU's max texture dimension are
-//! chunked into tiles that this pass reassembles in image space. Textures are
-//! RGBA8 decoded on the CPU (native-format upload is a later milestone); the
-//! shader passes sRGB-encoded values through untouched, matching egui's
-//! convention.
-//!
-//! Resource model: the loader worker builds a [`RenderImage`] (tile textures,
-//! bind groups, vertex buffers) using the layouts from [`ImageRendererState`]
-//! (created at startup against the surface format and shared into the worker
-//! so bind groups and pipeline agree). Per frame, the canvas enqueues a
-//! [`DrawImageCallback`] holding only view state; `prepare` writes the
-//! frame's uniform buffer, `paint` draws every tile of the displayed layer.
+//! Image canvas render pass (`egui_wgpu::CallbackTrait`): the loader worker
+//! builds the GPU-resident [`RenderImage`] from [`ImageRendererState`] layouts;
+//! each frame the canvas enqueues a [`DrawImageCallback`] to draw the tiles.
 
 use std::sync::{Arc, Mutex};
 
@@ -21,17 +8,14 @@ use wgpu::util::DeviceExt;
 
 const SHADER: &str = include_str!("render/image.wgsl");
 
-/// Vertex data: the tile's corner in image-normalized space and its texture
-/// coordinate. Six vertices per tile (two triangles), emitted once at upload.
+/// Image-normalized quad corner; also its texture coordinate.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
-    norm: [f32; 2],
     uv: [f32; 2],
 }
 
-/// Per-frame uniforms. Layout must match `Globals` in image.wgsl (explicit
-/// padding so there is no implicit padding for bytemuck to trip on).
+/// Per-frame uniforms; layout must match `Globals` in image.wgsl.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Globals {
@@ -76,12 +60,6 @@ impl ImageRendererState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
             ],
         });
 
@@ -110,22 +88,15 @@ impl ImageRendererState {
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
 
-        let vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
+            let vertex_layout = wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x2,
                     offset: 0,
                     shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 8,
-                    shader_location: 1,
-                },
-            ],
-        };
+                }],
+            };
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("photon_image_pipeline"),
@@ -158,6 +129,25 @@ impl ImageRendererState {
             tile_layout,
             globals_layout,
         }
+    }
+}
+
+/// Key for `callback_resources` (TypeId-keyed): insert and get must name this
+/// exact type, or the callback silently draws nothing.
+pub(crate) type ImageRendererHandle = Arc<ImageRendererState>;
+
+impl ImageRendererState {
+    pub(crate) fn insert_into(
+        resources: &mut egui_wgpu::CallbackResources,
+        handle: ImageRendererHandle,
+    ) {
+        resources.insert(handle);
+    }
+
+    pub(crate) fn from_resources(
+        resources: &egui_wgpu::CallbackResources,
+    ) -> Option<&ImageRendererHandle> {
+        resources.get::<ImageRendererHandle>()
     }
 }
 
@@ -206,10 +196,8 @@ pub(crate) fn chunk_grid(width: u32, height: u32, max_dim: u32) -> Vec<(u32, u32
     rects
 }
 
-/// Build the GPU-resident form of one decoded RGBA8 layer: chunked when the
-/// layer exceeds `max_dim`, each chunk getting a texture, bind group (both
-/// samplers; the shader picks) and its vertex quad. Texture uploads go
-/// through `queue`.
+/// Chunked GPU form of one RGBA8 layer. The sampler is linear; a nearest
+/// sampler must not be added (sharp scaling lives in the shader).
 pub(crate) fn build_layer(rgba: &[u8], width: u32, height: u32, ctx: &RenderContext<'_>) -> Layer {
     let device = ctx.device;
     let queue = ctx.queue;
@@ -219,12 +207,6 @@ pub(crate) fn build_layer(rgba: &[u8], width: u32, height: u32, ctx: &RenderCont
         label: Some("photon_linear_sampler"),
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
-        ..Default::default()
-    });
-    let nearest = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("photon_nearest_sampler"),
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
         ..Default::default()
     });
     let bytes_per_row = width * 4;
@@ -285,10 +267,6 @@ pub(crate) fn build_layer(rgba: &[u8], width: u32, height: u32, ctx: &RenderCont
                         binding: 1,
                         resource: wgpu::BindingResource::Sampler(&linear),
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&nearest),
-                    },
                 ],
             });
 
@@ -298,27 +276,21 @@ pub(crate) fn build_layer(rgba: &[u8], width: u32, height: u32, ctx: &RenderCont
             let uv_bottom = (ty + th) as f32 / height as f32;
             let vertices = [
                 Vertex {
-                    norm: [0.0, 0.0],
                     uv: [uv_left, uv_top],
                 },
                 Vertex {
-                    norm: [1.0, 0.0],
                     uv: [uv_right, uv_top],
                 },
                 Vertex {
-                    norm: [0.0, 1.0],
                     uv: [uv_left, uv_bottom],
                 },
                 Vertex {
-                    norm: [1.0, 0.0],
                     uv: [uv_right, uv_top],
                 },
                 Vertex {
-                    norm: [1.0, 1.0],
                     uv: [uv_right, uv_bottom],
                 },
                 Vertex {
-                    norm: [0.0, 1.0],
                     uv: [uv_left, uv_bottom],
                 },
             ];
@@ -407,9 +379,10 @@ impl egui_wgpu::CallbackTrait for DrawImageCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let Some(state) = resources.get::<ImageRendererState>() else {
+        let Some(state) = ImageRendererState::from_resources(resources) else {
             return Vec::new();
         };
+        let state = state.as_ref();
         let ppp = screen_descriptor.pixels_per_point;
         let globals = Globals {
             viewport_px: [
@@ -448,13 +421,14 @@ impl egui_wgpu::CallbackTrait for DrawImageCallback {
 
     fn paint(
         &self,
-        _info: egui::PaintCallbackInfo,
+        info: egui::PaintCallbackInfo,
         render_pass: &mut wgpu::RenderPass<'static>,
         resources: &egui_wgpu::CallbackResources,
     ) {
-        let Some(state) = resources.get::<ImageRendererState>() else {
+        let Some(state) = ImageRendererState::from_resources(resources) else {
             return;
         };
+        let state = state.as_ref();
         let Some(buffer) = self
             .uniform_slot
             .lock()
@@ -467,6 +441,17 @@ impl egui_wgpu::CallbackTrait for DrawImageCallback {
             return;
         };
 
+        // egui-wgpu sets the viewport to this callback's rect clamped to the
+        // clip rect; override it to the full target so the image can overflow
+        // the viewport when zoomed in (clipped by the scissor instead).
+        render_pass.set_viewport(
+            0.0,
+            0.0,
+            info.screen_size_px[0] as f32,
+            info.screen_size_px[1] as f32,
+            0.0,
+            1.0,
+        );
         render_pass.set_pipeline(&state.pipeline);
         render_pass.set_bind_group(1, &buffer, &[]);
         for tile in &layer.tiles {
@@ -502,8 +487,6 @@ mod tests {
 
     #[test]
     fn globals_layout_has_no_implicit_padding() {
-        // WGSL struct: three vec2 (0,8,16), vec4 tint at 16-align -> 32,
-        // sharp at 48, size rounded to 64.
         assert_eq!(std::mem::size_of::<Globals>(), 64);
         let g = Globals {
             viewport_px: [1.0, 2.0],
@@ -514,24 +497,17 @@ mod tests {
             sharp: 1.0,
             _pad1: [0.0; 3],
         };
-        let bytes: &[u8] = bytemuck::bytes_of(&g);
-        assert_eq!(bytes.len(), 64);
+        assert_eq!(bytemuck::bytes_of(&g).len(), 64);
     }
 }
 
-/// Headless GPU smoke tests (Roadmap §5b): they run the real wgpu code paths —
-/// the `image.wgsl` render pipeline and a compute dispatch/read-back — on a
-/// surface-less adapter. Each test skips cleanly (returns early with a note)
-/// when no adapter/device is available, so the suite still passes on a machine
-/// without a GPU.
+/// Headless GPU tests; each skips when no adapter is available.
 #[cfg(test)]
 mod gpu_tests {
     use super::*;
     use std::time::Duration;
 
-    /// Acquire a headless device with no surface, trying the default adapter
-    /// first and falling back to a software adapter. Returns `None` instead of
-    /// panicking when no adapter/device can be created, so callers can skip.
+    /// Returns `None` (so the test skips) when no adapter/device is available.
     fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
@@ -554,9 +530,7 @@ mod gpu_tests {
         Some((device, queue))
     }
 
-    /// The real payload: `image.wgsl` compiles and both pipelines build on a
-    /// live device. Validation errors are captured with an error scope rather
-    /// than panicking anonymously.
+    /// `image.wgsl` compiles and the pipeline builds on a live device.
     #[test]
     fn render_pipeline_builds_on_gpu() {
         let Some((device, _queue)) = headless_device() else {
@@ -574,10 +548,7 @@ mod gpu_tests {
         );
     }
 
-    /// Minimal end-to-end compute round-trip: dispatch an inline WGSL entry
-    /// point that writes known values into a storage buffer, then map the
-    /// buffer back and assert the bytes. Proves the harness can drive compute
-    /// work (the seed for future compute filters) and read results back.
+    /// Compute dispatch + read-back round-trip.
     #[test]
     fn trivial_compute_pass_runs() {
         let Some((device, queue)) = headless_device() else {
@@ -672,5 +643,168 @@ fn main() {
         readback.unmap();
 
         assert_eq!(values, [42u32, 7, 123_456, 0]);
+    }
+
+    /// Draws a known image offscreen and reads the pixels back.
+    #[test]
+    fn render_pass_draws_pixels_offscreen() {
+        let Some((device, queue)) = headless_device() else {
+            eprintln!("no GPU adapter; skipping render_pass_draws_pixels_offscreen");
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let state = ImageRendererState::new(&device, format);
+
+        // 2x2 source: red, green / blue, white.
+        let rgba: Vec<u8> = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let ctx = RenderContext {
+            device: &device,
+            queue: &queue,
+            tile_layout: &state.tile_layout,
+            max_dim: 64,
+        };
+        let image = build_render_image(&ctx, vec![rgba], 2, 2, false);
+
+        const SIZE: u32 = 4;
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("photon_gpu_test_render_target"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+
+        let globals = Globals {
+            viewport_px: [0.0, 0.0],
+            viewport_size_px: [SIZE as f32, SIZE as f32],
+            screen_size_px: [SIZE as f32, SIZE as f32],
+            _pad0: [0.0; 2],
+            tint: [1.0; 4],
+            sharp: 0.0,
+            _pad1: [0.0; 3],
+        };
+        let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("photon_gpu_test_globals"),
+            contents: bytemuck::bytes_of(&globals),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let globals_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("photon_gpu_test_globals_bg"),
+            layout: &state.globals_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals_buffer.as_entire_binding(),
+            }],
+        });
+
+        // copy_texture_to_buffer requires a 256-aligned row pitch; pad, then
+        // index with the aligned stride when reading pixels back.
+        const ALIGNED_BPR: u32 = 256;
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("photon_gpu_test_render_readback"),
+            size: (ALIGNED_BPR * SIZE) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("photon_gpu_test_render_encoder"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("photon_gpu_test_render_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&state.pipeline);
+            pass.set_bind_group(1, &globals_bind, &[]);
+            for tile in &image.layers[0].tiles {
+                pass.set_bind_group(0, &tile.bind_group, &[]);
+                pass.set_vertex_buffer(0, tile.vertex_buffer.slice(..));
+                pass.draw(0..6, 0..1);
+            }
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: Default::default(),
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(ALIGNED_BPR),
+                    rows_per_image: Some(SIZE),
+                },
+            },
+            wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(20)),
+            })
+            .expect("device poll failed");
+        rx.recv_timeout(Duration::from_secs(20))
+            .expect("buffer mapping timed out")
+            .expect("buffer mapping failed");
+
+        let pixels = {
+            let view = readback.slice(..).get_mapped_range();
+            view.to_vec()
+        };
+        readback.unmap();
+
+        let px = |x: u32, y: u32| -> [u8; 4] {
+            let i = (y * ALIGNED_BPR + x * 4) as usize;
+            [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+        };
+        // Top-left quadrant samples source texel (0,0) = red; bottom-right (1,1)
+        // = white. If the pass drew nothing, everything stays the black clear.
+        assert!(
+            px(0, 0)[0] > 200 && px(0, 0)[1] < 60,
+            "top-left should be red, got {:?}",
+            px(0, 0)
+        );
+        assert!(
+            px(3, 3)[0] > 200 && px(3, 3)[1] > 200 && px(3, 3)[2] > 200,
+            "bottom-right should be white, got {:?}",
+            px(3, 3)
+        );
     }
 }

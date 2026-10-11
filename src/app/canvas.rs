@@ -103,8 +103,7 @@ impl PhotonApp {
         } else {
             [1.0, 1.0, 1.0, 1.0]
         };
-        // Sharp sampling only while magnifying: nearest-neighbor minification
-        // just drops pixels (aliasing), which reads as a rendering bug.
+        // Sharp only when magnified: snapping while minifying aliases.
         let sharp = self.settings.use_sharp_scaling && self.zoom >= 1.0;
         // Tile-repeat ("seamless texture") view: draw the image once at the
         // centre rect plus any neighbouring copies needed to cover the canvas.

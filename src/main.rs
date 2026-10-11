@@ -155,11 +155,10 @@ fn main() -> eframe::Result<()> {
                     &wgpu_state.device,
                     wgpu_state.target_format,
                 ));
-                wgpu_state
-                    .renderer
-                    .write()
-                    .callback_resources
-                    .insert(renderer_state.clone());
+                render::ImageRendererState::insert_into(
+                    &mut wgpu_state.renderer.write().callback_resources,
+                    renderer_state.clone(),
+                );
                 app.image_renderer = Some(renderer_state);
             }
 

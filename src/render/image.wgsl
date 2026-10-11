@@ -1,22 +1,15 @@
-// Photon image canvas shader: draws one tile of the displayed image with
-// either linear or nearest sampling (sharp/pixel scaling), tinted while the
-// image loads. Coordinates match egui's conventions: positions are physical
-// pixels with +y down, mapped to NDC the same way egui's own pipeline does.
+// Image canvas shader: one tile per draw, tinted while loading.
 
 struct Globals {
-    // Top-left of the callback viewport in physical pixels, and its size.
     viewport_px: vec2<f32>,
     viewport_size_px: vec2<f32>,
-    // Full screen size in physical pixels (for the -> NDC transform).
     screen_size_px: vec2<f32>,
     tint: vec4<f32>,
-    // > 0.5: sample nearest (sharp pixel scaling).
-    sharp: f32,
+    sharp: f32, // > 0.5 = pixel-sharp
 };
 
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var linear_sampler: sampler;
-@group(0) @binding(2) var nearest_sampler: sampler;
 
 @group(1) @binding(0) var<uniform> globals: Globals;
 
@@ -26,30 +19,31 @@ struct VsOut {
 };
 
 @vertex
-fn vs_main(
-    @location(0) norm: vec2<f32>, // image-normalized quad corner, 0..1
-    @location(1) uv: vec2<f32>,   // texture coordinates of this tile's corners
-) -> VsOut {
-    let px = globals.viewport_px + norm * globals.viewport_size_px;
-    let out: VsOut = VsOut(
-        vec4<f32>(
-            2.0 * px.x / globals.screen_size_px.x - 1.0,
-            1.0 - 2.0 * px.y / globals.screen_size_px.y,
-            0.0,
-            1.0,
-        ),
-        uv,
+fn vs_main(@location(0) uv: vec2<f32>) -> VsOut {
+    // Absolute pixels -> NDC; `paint` overrides the viewport to the full target.
+    let px = globals.viewport_px + uv * globals.viewport_size_px;
+    let ndc = vec2<f32>(
+        2.0 * px.x / globals.screen_size_px.x - 1.0,
+        1.0 - 2.0 * px.y / globals.screen_size_px.y,
     );
-    return out;
+    return VsOut(vec4<f32>(ndc, 0.0, 1.0), uv);
+}
+
+// Snaps the sample to the texel centre; box from fwidth so it holds at any zoom.
+fn sharp_sample_uv(uv: vec2<f32>) -> vec2<f32> {
+    let tex_size = vec2<f32>(textureDimensions(tex)); // (w, h)
+    let inv_size = 1.0 / tex_size;                    // (1/w, 1/h)
+    // This fragment's footprint in source pixels, clamped to (0, 1].
+    let box = clamp(fwidth(uv) * tex_size, vec2<f32>(1e-5), vec2<f32>(1.0));
+    let coord = uv * tex_size - 0.5 * box;
+    let tx_offset = smoothstep(vec2<f32>(1.0) - box, vec2<f32>(1.0), fract(coord));
+    return (floor(coord) + vec2<f32>(0.5) + tx_offset) * inv_size;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    var color: vec4<f32>;
-    if (globals.sharp > 0.5) {
-        color = textureSample(tex, nearest_sampler, in.uv);
-    } else {
-        color = textureSample(tex, linear_sampler, in.uv);
-    }
-    return color * globals.tint;
+    // `select` evaluates both arms, so the derivative in `sharp_sample_uv`
+    // always runs in uniform control flow.
+    let uv = select(in.uv, sharp_sample_uv(in.uv), globals.sharp > 0.5);
+    return textureSample(tex, linear_sampler, uv) * globals.tint;
 }
