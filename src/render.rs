@@ -518,3 +518,159 @@ mod tests {
         assert_eq!(bytes.len(), 64);
     }
 }
+
+/// Headless GPU smoke tests (Roadmap §5b): they run the real wgpu code paths —
+/// the `image.wgsl` render pipeline and a compute dispatch/read-back — on a
+/// surface-less adapter. Each test skips cleanly (returns early with a note)
+/// when no adapter/device is available, so the suite still passes on a machine
+/// without a GPU.
+#[cfg(test)]
+mod gpu_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Acquire a headless device with no surface, trying the default adapter
+    /// first and falling back to a software adapter. Returns `None` instead of
+    /// panicking when no adapter/device can be created, so callers can skip.
+    fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+
+        let request = |force_fallback_adapter| {
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                force_fallback_adapter,
+                compatible_surface: None,
+            }))
+        };
+        let adapter = request(false).or_else(|_| request(true)).ok()?;
+
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("photon_gpu_test_device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            ..Default::default()
+        }))
+        .ok()?;
+        Some((device, queue))
+    }
+
+    /// The real payload: `image.wgsl` compiles and both pipelines build on a
+    /// live device. Validation errors are captured with an error scope rather
+    /// than panicking anonymously.
+    #[test]
+    fn render_pipeline_builds_on_gpu() {
+        let Some((device, _queue)) = headless_device() else {
+            eprintln!("no GPU adapter; skipping render_pipeline_builds_on_gpu");
+            return;
+        };
+
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let _state = ImageRendererState::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let _ = device.poll(wgpu::PollType::Poll);
+        let error = pollster::block_on(scope.pop());
+        assert!(
+            error.is_none(),
+            "image.wgsl pipeline failed to build: {error:?}"
+        );
+    }
+
+    /// Minimal end-to-end compute round-trip: dispatch an inline WGSL entry
+    /// point that writes known values into a storage buffer, then map the
+    /// buffer back and assert the bytes. Proves the harness can drive compute
+    /// work (the seed for future compute filters) and read results back.
+    #[test]
+    fn trivial_compute_pass_runs() {
+        let Some((device, queue)) = headless_device() else {
+            eprintln!("no GPU adapter; skipping trivial_compute_pass_runs");
+            return;
+        };
+
+        const COMPUTE_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read_write> data: array<u32>;
+
+@compute @workgroup_size(1)
+fn main() {
+    data[0] = 42u;
+    data[1] = 7u;
+    data[2] = 123456u;
+    data[3] = 0u;
+}
+"#;
+
+        let storage = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("photon_gpu_test_storage"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("photon_gpu_test_readback"),
+            size: 16,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("photon_gpu_test_compute_shader"),
+            source: wgpu::ShaderSource::Wgsl(COMPUTE_WGSL.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("photon_gpu_test_compute_pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("photon_gpu_test_compute_bind_group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: storage.as_entire_binding(),
+            }],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("photon_gpu_test_compute_encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("photon_gpu_test_compute_pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&storage, 0, &readback, 0, 16);
+        queue.submit(Some(encoder.finish()));
+
+        // Bound the GPU wait: poll with a timeout *and* a matching channel
+        // timeout, so a stuck submission fails the test rather than hanging
+        // the suite.
+        let (tx, rx) = std::sync::mpsc::channel();
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(20)),
+            })
+            .expect("device poll failed");
+        rx.recv_timeout(Duration::from_secs(20))
+            .expect("buffer mapping timed out")
+            .expect("buffer mapping failed");
+
+        let values = {
+            let view = readback.slice(..).get_mapped_range();
+            bytemuck::pod_read_unaligned::<[u32; 4]>(&view[..16])
+        };
+        readback.unmap();
+
+        assert_eq!(values, [42u32, 7, 123_456, 0]);
+    }
+}
