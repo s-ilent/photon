@@ -7,6 +7,8 @@ struct Globals {
     tint: vec4<f32>,
     sharp: f32,         // > 0.5 = pixel-sharp
     linear_source: f32, // > 0.5 = linear-light source
+    hdr_source: f32,    // > 0.5 = float/HDR source, tonemap
+    exposure: f32,      // exposure in EV (only when hdr_source)
 };
 
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -55,10 +57,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // always runs in uniform control flow.
     let uv = select(in.uv, sharp_sample_uv(in.uv), globals.sharp > 0.5);
     let sampled = textureSample(tex, linear_sampler, uv);
-    // Encode a linear-light source to display space before tinting; tint stays
-    // in display space to match egui's gamma-space pass. Alpha is not encoded.
+    // HDR: scale by exposure, then Reinhard; display-encode a linear source;
+    // tint stays in display space to match egui's gamma-space pass. Alpha is
+    // neither tonemapped nor encoded.
     var rgb = sampled.rgb;
-    if globals.linear_source > 0.5 {
+    if (globals.hdr_source > 0.5) {
+        let scaled = max(rgb, vec3<f32>(0.0)) * exp2(globals.exposure);
+        rgb = scaled / (vec3<f32>(1.0) + scaled);
+    }
+    if (globals.linear_source > 0.5) {
         rgb = gamma_from_linear_rgb(rgb);
     }
     return vec4<f32>(rgb * globals.tint.rgb, sampled.a * globals.tint.a);
