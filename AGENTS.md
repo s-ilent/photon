@@ -70,14 +70,24 @@ All source lives under `src/`. The binary entry point is `src/main.rs`.
 
 ```
 src/
-├── main.rs              # Entry point. eframe::App impl (App::ui), input/shortcut handling, top/bottom panels, sidebar.
+├── main.rs              # Entry point. `fn main()` bootstrap + `impl eframe::App` (delegates panel bodies to ui/ and dispatches commands).
+├── input.rs             # Shortcut scanner: `take_commands(ctx)` reads the command registry's binding table off egui input (incl. the Ctrl+C/V command-event gotcha).
+├── commands.rs          # Command registry (Roadmap §1): `Command` enum, `default_bindings()`, `PhotonApp::run_command()` — the single key→action table.
+├── ui.rs                # Module root for the ui/ submodule.
 ├── app.rs               # PhotonApp state struct + shared types (Priority, WorkerMessage, LoadResult, StatusOverlay, SaveStatus, MouseMode, SortMode, ZoomReset, AppSettings). Module root for the app/ submodule.
 ├── dir_walker.rs        # DirWalker: fast non-recursive (max_depth=1, non-hidden) scan of supported image files.
-├── image_loader.rs      # load_image(): DDS via image_dds, everything else via the image crate; returns DecodedImage (one RGBA8 buffer per layer).
+├── image_loader.rs      # load_image() -> Result<DecodedImage, DecodeError>: DDS via image_dds, everything else via the image crate; one RGBA8 buffer per layer.
 ├── render.rs            # Image canvas render pass: WGSL pipeline, tile chunking, DrawImageCallback (see "GPU / render pipeline").
+├── ui/
+│   ├── toolbar.rs       # Top panel body (open/copy/paste/save, mouse mode, sidebar toggle, prev/next).
+│   ├── info_bar.rs      # Bottom info bar (index, filename, dimensions, zoom, save status, layer/face selector).
+│   ├── sidebar.rs       # Left file-list sidebar (sort combo + virtualized rows).
+│   ├── settings_window.rs # Settings window body.
+│   └── overlay.rs       # Centre-screen status overlay (spinner / error / unsupported) + loading text.
 └── app/
     ├── loader.rs        # Worker thread (decode + GPU tile upload), LRU texture cache, speculative neighbor preload, directory load + watcher, sorting.
-    ├── canvas.rs        # Image workspace: zoom/pan/selection drawing, checkerboard background, input handling per mouse mode, status overlays.
+    ├── canvas.rs        # Image workspace: zoom/pan/selection drawing, checkerboard background, input handling per mouse mode.
+    ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, fit_zoom, zoom_to_fill, ZoomLock. Pure functions; not yet wired into canvas/UI.
     ├── clipboard.rs     # Copy (with optional crop from selection) and paste via arboard; current_rgba() source of truth for displayed bytes.
     ├── config.rs        # Settings persistence: config.ron via serde + RON, config dir via the directories crate.
     ├── saver.rs         # Save / Save Selection As: rfd save-as dialog, background encode, bottom-bar status feedback.
@@ -152,12 +162,14 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **twenty-nine unit tests** across seven files, all pure-CPU:
+The suite is **fifty-one unit tests** across ten files, all pure-CPU:
 
-- `main.rs` — shortcut dispatch (`take_shortcut_actions`): clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
+- `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, and Copy/Paste carry their raw-key fallbacks.
+- `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
+- `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; and `DecodeError::is_unsupported_format` classification (Roadmap §8).
+- `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, zero-size guards, `clamp_zoom` bounds, `zoom_to_fill`, and `ZoomLock`. (Pure; the canvas/UI wiring is a later step.)
 - `render.rs` — tile `chunk_grid` math (single tile, split grids, exact multiples) and the uniform struct's WGSL-compatible layout.
 - `dir_walker.rs` — `test_is_supported_image` (extension recognition).
-- `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test.
 - `app/clipboard.rs` — three `crop_rgba` tests (empty rect, single pixel, clamping) and a `current_rgba` test for following the displayed layer.
 - `app/saver.rs` — PNG and JPEG encoders write decodable files (JPEG drops alpha).
 - `app/loader.rs` — zoom-reset semantics (`ZoomReset::DimensionChange`/`Never`/`Always`), sharp-scaling sampler pick, and directory-refresh semantics (place preserved without reload / reload on mtime change / landing when the current file vanishes) on cached loads, exercised through `request_current`/`apply_dir_refresh` without a GPU.
@@ -185,7 +197,7 @@ Run tests with `cargo test --release` (debug builds are slow to compile and run 
 ### Known minor issues (do not "fix" unless asked)
 
 - The build and `cargo clippy --release` are currently **warning-free**; keep it that way.
-- The loader worker classifies decode errors for the overlay by **string prefix** (`"Failed to decode"` → UnsupportedFormat) between `image_loader.rs` and `app/loader.rs` — brittle but intentional; keep the prefixes in sync if you touch either side.
+- The loader worker decides the overlay via `DecodeError::is_unsupported_format()` (`image_loader.rs`), carried across the result channel as `LoadResult::Failed`'s `is_format_error` bool. When you add a decode failure path, classify it (unsupported/`InvalidData` vs a non-format error) — do not reintroduce string comparisons.
 - `Todo.md` is the live worklist (open feature gaps, perf items, deferred shader-pass work). `Roadmap.md` is the long-horizon forward feature map (grouped by capability, with algorithm/CLI reference appendices). Check both before planning changes.
 
 ---
@@ -218,7 +230,7 @@ Many extra files in the repo are **ignored by git** (see `.gitignore`) and are A
 
 1. Read `CLAUDE.md` for behavioral rules.
 2. `cargo build --release` to confirm the tree compiles (expect zero warnings, no errors).
-3. `cargo test --release` to confirm the ten unit tests pass.
+3. `cargo test --release` to confirm the 51 unit tests pass.
 4. For runtime work, `cargo run --release -- /some/folder/of/images` to launch.
 
 Note for agents running inside the ZCode desktop app: the sandbox rewrites `argv[0]`, which breaks rustup's proxy dispatch — invoke toolchain commands as `env cargo build --release` etc.

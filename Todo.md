@@ -72,19 +72,27 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
       max texture dimension and reassembled in image space; the oversized
       rejection is gone. Remaining limit is RAM for the CPU-side decode.
 - [ ] **Key configuration** — user-configurable shortcut map (config.ron);
-      F11 fullscreen and all others become remappable then. Substrate is the
-      command registry (`Roadmap.md` §1).
+      F11 fullscreen and all others become remappable then. The substrate — the
+      `Command` registry + binding table + `run_command` dispatch — landed
+      2026-10-11 (Roadmap §1 step 1); remaining is the config-file table and a
+      Settings rebinding UI.
 - [ ] **Exif auto-rotate on load** (`Roadmap.md` §3) — orient before fit and
-      scrollbar math; needs `kamadak-exif` (also feeds the metadata panel).
+      scrollbar math; source the orientation from the `image` crate's decoder or
+      `kamadak-exif` (also feeds the metadata panel).
 - [ ] **Fit modes + zoom set** (`Roadmap.md` §3) — don't-fit / reduce-only /
       always-fit, fit-window per axis + centre, zoom 100 % / to-desktop / lock.
+      Pure geometry landed in `app/view.rs` (`FitMode`, `fit_zoom`,
+      `zoom_to_fill`, `ZoomLock`, 2026-10-11); remaining is canvas + Settings
+      wiring, and fit-window-per-axis/centre still to build.
 - [ ] **Status-bar pixel readout** (`Roadmap.md` §3) — RGB / alpha / HTML hex
       under the cursor.
 - [ ] **Content-based format detection** (`Roadmap.md` §5) — sniff bytes,
       honour them when the extension lies.
-- [ ] **Decode-error enum** (`Roadmap.md` §5) — replaces the `"Failed to
-      decode"` string-prefix classification between `image_loader.rs` and
-      `app/loader.rs`; lands with the `thiserror` reintroduction below.
+- [x] **Decode-error enum** (`Roadmap.md` §8) — DONE 2026-10-11: typed
+      `DecodeError` in `image_loader.rs` (hand-rolled `Display`/`Error`, no new
+      dep); `LoadResult::Failed.is_format_error` now derives from
+      `is_unsupported_format()` instead of the `"Failed to decode"` prefix. The
+      `thiserror` reintroduction stays optional (the manual impl is fine).
 
 ## Shader pass milestones (the long arc)
 
@@ -160,6 +168,22 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-11 (roadmap intake + first parallel workstreams)
+- Docs: `Roadmap.md` added (forward feature map; scope fixed by a scoping
+  review — see its §0/§12). `Todo.md` re-pointed at it.
+- **Concern split** (mechanical): `src/main.rs` reduced to bootstrap;
+  panel bodies moved to `ui/{toolbar,info_bar,sidebar,settings_window,overlay}.rs`,
+  the shortcut scanner to `input.rs`. 29 tests stayed green.
+- **Command registry** (`Roadmap.md` §1, step 1): `Command` enum +
+  `default_bindings()` + `PhotonApp::run_command()`; `take_commands()` scans
+  the table; `main.rs` dispatches through it. Registry is now the single
+  key→action source. CLI/params/menus/rebinding are the follow-ups.
+- **Typed `DecodeError`** (`Roadmap.md` §8): replaces the string-prefix
+  classification.
+- **`app/view.rs`** (`Roadmap.md` §3): pure `FitMode` / `fit_zoom` /
+  `zoom_to_fill` / `ZoomLock` geometry (wiring pending).
+- 51 unit tests; build and clippy warning-free.
 
 ### 2026-10-11 (shader pass)
 - Image canvas renders through a custom wgpu pipeline (WGSL, M1/M2):
