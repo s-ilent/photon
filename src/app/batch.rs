@@ -7,7 +7,12 @@
 //! `PhotonApp`, and no wgpu here — the batch window and recipe import/export
 //! land on top of these functions later.
 //!
-//! [`run_batch`] fans the jobs out across CPU cores with `rayon`.
+//! **[`run_batch`] fans the jobs out across CPU cores with `rayon`.**
+//!
+//! Scope note: this CPU engine covers the cheap chain steps (format, resize,
+//! rotate/flip, grayscale/negative). **Image filters are compute-shader work**
+//! (Roadmap §5b) — the convolution kernels are implemented as a `wgpu` compute
+//! pass and are deliberately NOT a CPU routine here.
 
 use std::io::{Seek, Write};
 use std::path::PathBuf;

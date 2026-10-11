@@ -120,7 +120,7 @@ registry (§1) because the batch chain needs them (§5), but they are *not*
 surfaced interactively. If that feels wrong later, exposing them is a small
 change — flagging it rather than deciding silently. **Colour depth/palette
 conversion and dithering are out of scope**: format codecs handle their own
-depth internally.
+depth internally. **Filters are compute-shader work** — see §5b.
 
 ## 5. Batch tools
 
@@ -134,12 +134,28 @@ depth internally.
       - **resize** (pixels / percent) with the resample-filter set (Appendix A);
       - **rotate / flip / grayscale / negative**;
       - **convolution filters** — blur, soften, sharpen, Gaussian 3×3/5×5,
-        emboss, edge (Appendix A).
+        emboss, edge (Appendix A). **Compute shader** (§5b), not a CPU loop.
 - [ ] **Recipe import/export** as CLI text — falls out of §1/§10.
 - [ ] **Batch rename**: mask with insertable tokens — file name/ext/size/date/
       time, image width/height/bpp, and `<Counter.start,step,digits>`
       (zero-padded); search-and-replace; live preview; reorderable list (order
       matters for counters).
+
+## 5b. Image filters are compute-shader work (decision)
+
+**Decision (2026-10-11): image filters are implemented as `wgpu` compute
+shaders, not CPU loops.** A compute pass reads the input texture and writes an
+output texture — markedly faster than the CPU path for convolution on real
+images, and it reuses the device/queue and GPU-resident textures the render
+pass already owns. The kernels in Appendix A are the specs for these shaders.
+
+Consequence to plan for: the batch engine (`app/batch.rs`) is deliberately
+CPU-only today, so the **filter steps of the batch chain** need a GPU path.
+Share one filter module between the batch view and the interactive preview
+rather than reimplementing the kernels on the CPU. Non-filter chain steps
+(format conversion, resize, rotate/flip, grayscale/negative) stay CPU as they
+are. This also applies to any future effect filters (e.g. an interactive
+filter preview) — do not add a CPU convolution routine.
 
 ## 6. Panorama creator
 
@@ -261,7 +277,8 @@ Mapped onto the existing arcs (`Todo.md`: shader milestones M1–M5).
 1. **Command registry + params serialisation** (§1) — prerequisite for §5, §10.
 2. **Near-term viewing polish** (§3): fit modes, zoom set, Exif auto-rotate,
    pixel readout, tile-repeat view. Small, high-visibility.
-3. **Batch conversion + chain**, and **batch rename** (§5).
+3. **Batch conversion + chain**, and **batch rename** (§5). The filter steps of
+   the chain wait on the **compute-shader filter pass** (§5b).
 4. **Editing core** (§4): rotate / flip / crop, grayscale / negative, undo.
 5. **Metadata** (§9): Exif panel + Image Info; ICC when the shader pass is ready.
 6. **Browser** (§7) with the persistent thumbnail cache; then **desktop
@@ -270,8 +287,9 @@ Mapped onto the existing arcs (`Todo.md`: shader milestones M1–M5).
 8. **CLI + rebinding** (§10) — near-free once §1 exists.
 9. **Broad codec expansion** (§8) — JXL, SVG, archives, lossless JPEG, RAW.
 
-The shader arc (`M3` BCn, `M4` HDR/tonemap, `M5` cubemap view) runs in parallel
-and is orthogonal; it just has to be kept, not bolted on.
+The shader arc (`M3` BCn, `M4` HDR/tonemap, `M5` cubemap view, plus the
+**compute-shader filter pass** of §5b) runs in parallel and is orthogonal; it
+just has to be kept, not bolted on.
 
 ---
 

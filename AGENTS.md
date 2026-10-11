@@ -133,6 +133,8 @@ The device requests `max_texture_dimension_2d` of 16384, clamped to what the ada
 
 GPU lifetime is **wgpu refcounting**: the cache and `PhotonApp::displayed_image` hold `Arc<RenderImage>`, and dropping the last reference (including in-flight frames, which wgpu tracks) frees the resources. There is no manual `free_texture` bookkeeping — do not reintroduce it. egui's `TextureId` registration is no longer used for the image canvas.
 
+**Image filters are compute-shader work** (`Roadmap.md` §5b): the convolution kernels are implemented as a `wgpu` compute pass (input texture → output texture), shared by the batch chain and any interactive preview — do **not** add a CPU convolution routine. The `app/batch.rs` CPU engine covers only the cheap chain steps (format, resize, rotate/flip, grayscale/negative).
+
 ### Mouse modes and input
 
 - **Browse** (default): scroll wheel zooms (log-scale, clamped 0.1–50, around the cursor); left/middle drag pans. Files/folders can be drag-and-dropped onto the window to open them (`open_path`, shared with the Open dialog) — **X11 and Windows/macOS only**: winit's Wayland backend has no file drop support, so on Wayland the drop is a no-op.
