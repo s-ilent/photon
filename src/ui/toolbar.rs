@@ -4,6 +4,10 @@ use egui_phosphor::regular as icons;
 
 impl app::PhotonApp {
     pub(crate) fn ui_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // Drain any finished background batch run every frame, regardless of
+        // whether the Batch Convert window is currently open.
+        self.check_batch_status(ctx);
+
         // Far-right elements are laid out first (right-to-left)
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button(icons::GEAR).clicked() {
@@ -31,6 +35,13 @@ impl app::PhotonApp {
                 }
                 if ui.button(format!("{} Save", icons::FLOPPY_DISK)).clicked() {
                     self.save_image_as();
+                }
+                if ui
+                    .button(format!("{} Convert\u{2026}", icons::ARROWS_CLOCKWISE))
+                    .on_hover_text("Batch convert files")
+                    .clicked()
+                {
+                    self.batch.open = true;
                 }
                 if ui
                     .add_enabled(
@@ -88,5 +99,11 @@ impl app::PhotonApp {
                 }
             });
         });
+
+        // The Batch Convert window is an `egui::Window`; drive it from here so
+        // the toolbar is its single entry point.
+        if self.batch.open {
+            self.ui_batch_window(ctx);
+        }
     }
 }

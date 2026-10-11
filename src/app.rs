@@ -19,9 +19,8 @@ mod clipboard;
 mod config;
 mod loader;
 mod saver;
-// Batch conversion engine (Roadmap.md §5).
-#[allow(dead_code)]
-mod batch;
+// Batch conversion engine (Roadmap.md §5) — driven by the Batch Convert window.
+pub(crate) mod batch;
 // Interactive editing ops + undo (Roadmap.md §4) — landing next.
 #[allow(dead_code)]
 mod edit;
@@ -91,6 +90,72 @@ pub enum StatusOverlay {
 pub struct SaveStatus {
     pub(crate) message: String,
     pub(crate) expires: Instant,
+}
+
+/// Message from the batch-convert worker thread back to the main thread.
+///
+/// The worker runs the whole job list through [`batch::run_batch`] (CPU-parallel
+/// via `rayon`) and sends exactly one message when every file is done, so the
+/// render loop is never blocked on conversion.
+pub(crate) enum BatchMessage {
+    /// Every job finished; one status per submitted job, in job order.
+    Finished(Vec<batch::FileStatus>),
+}
+
+/// State for the interactive Batch Convert window (Roadmap.md §5). Empty and
+/// closed by default; the conversion engine itself lives in [`batch`].
+pub(crate) struct BatchState {
+    /// Whether the window is shown.
+    pub(crate) open: bool,
+    /// The queued source files, in display order.
+    pub(crate) files: Vec<PathBuf>,
+    /// Target output format for every file in the run.
+    pub(crate) format: batch::OutputFormat,
+    /// Output folder chosen with the folder picker; `None` until picked.
+    pub(crate) output_dir: Option<PathBuf>,
+    /// JPEG quality (1–100); only consulted when `format` is
+    /// [`batch::OutputFormat::Jpeg`].
+    pub(crate) jpeg_quality: u8,
+    /// What to do when a target file already exists.
+    pub(crate) overwrite: batch::OverwritePolicy,
+    /// The operation chain applied to every file, in order.
+    pub(crate) operations: Vec<batch::Operation>,
+    /// Per-file status rows, parallel to `files`. `None` before a run and for
+    /// files the worker has not reported yet.
+    pub(crate) statuses: Vec<Option<batch::FileStatus>>,
+    /// Receiver for the background run's result; `Some` only while running.
+    pub(crate) receiver: Option<Receiver<BatchMessage>>,
+    /// True from the moment Run is clicked until the worker reports back.
+    pub(crate) running: bool,
+    /// UI scratch: index into the "add step" combo's choice list.
+    pub(crate) pending_op: usize,
+    /// UI scratch: pending resize width (`0` = keep aspect ratio).
+    pub(crate) resize_width: u32,
+    /// UI scratch: pending resize height (`0` = keep aspect ratio).
+    pub(crate) resize_height: u32,
+    /// UI scratch: pending resize kernel.
+    pub(crate) resize_filter: batch::ResampleFilter,
+}
+
+impl Default for BatchState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            files: Vec::new(),
+            format: batch::OutputFormat::Png,
+            output_dir: None,
+            jpeg_quality: 90,
+            overwrite: batch::OverwritePolicy::Overwrite,
+            operations: Vec::new(),
+            statuses: Vec::new(),
+            receiver: None,
+            running: false,
+            pending_op: 0,
+            resize_width: 0,
+            resize_height: 0,
+            resize_filter: batch::ResampleFilter::Lanczos3,
+        }
+    }
 }
 
 /// Image pixel under the cursor, sampled each frame for the status-bar
@@ -205,6 +270,8 @@ pub struct PhotonApp {
     /// `None` when the pointer is away from the image or no decoded bytes are
     /// available to sample (e.g. a cache-hit load).
     pub(crate) hovered_pixel: Option<HoveredPixel>,
+    /// Batch Convert window state (Roadmap.md §5).
+    pub(crate) batch: BatchState,
 }
 
 impl PhotonApp {
@@ -253,6 +320,7 @@ impl PhotonApp {
             saved_settings: None,
             error_overlay: None,
             hovered_pixel: None,
+            batch: BatchState::default(),
         }
     }
 
