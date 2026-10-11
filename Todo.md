@@ -198,6 +198,18 @@ the escalation path if a picked crate needs a fix upstream lacks.
 
 ## Done
 
+### 2026-10-11 (render fixes)
+- Canvas drew nothing: `callback_resources` (TypeId-keyed) had `Arc<ImageRendererState>`
+  inserted but looked up as `ImageRendererState` → both callback hooks bailed
+  silently. Now via `insert_into`/`from_resources`.
+- Wrong scale / zoom-in clamped to the viewport: egui-wgpu sets the callback
+  viewport to rect∩clip. Absolute-pixel coords + a full-target viewport override
+  in `paint` (scissor does the clipping). Tile quads carry their sub-rect, so
+  oversized tiling places tiles.
+- Removed the nearest sampler; sharp scaling snaps the sample coord to the texel
+  centre in `image.wgsl` over the one linear sampler.
+- New headless offscreen draw test (103 tests).
+
 ### 2026-10-11 (batch 4: GPU harness, batch UI, editing core)
 - **GPU test harness** (`render.rs` `gpu_tests`): headless adapter; the real
   render pipeline is asserted to build on the GPU and a compute pass round-trips
