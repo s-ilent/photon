@@ -44,13 +44,12 @@ impl PhotonApp {
         let texture_size = egui::vec2(img_w as f32, img_h as f32);
 
         if self.needs_fit {
-            // Reduce-only fit: shrink a too-large image to the window, never
-            // upscale past 100%. (A user-selectable fit mode is a later step;
-            // `view::FitMode` already models the alternatives.)
+            // Fit using the user-selected mode (default reduce-only: shrink a
+            // too-large image to the window, never upscale past 100%).
             self.zoom = view::fit_zoom(
                 response.rect.size(),
                 texture_size,
-                view::FitMode::ReduceOnly,
+                self.settings.fit_mode,
             );
             self.pan = egui::Vec2::ZERO;
             self.needs_fit = false;

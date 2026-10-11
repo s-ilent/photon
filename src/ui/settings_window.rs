@@ -28,6 +28,24 @@ impl app::PhotonApp {
                             }
                         });
                 });
+                ui.horizontal(|ui| {
+                    ui.label("Fit mode:");
+                    egui::ComboBox::from_id_salt("fit_mode")
+                        .selected_text(self.settings.fit_mode.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                app::view::FitMode::DontFit,
+                                app::view::FitMode::ReduceOnly,
+                                app::view::FitMode::AlwaysFit,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.settings.fit_mode,
+                                    mode,
+                                    mode.label(),
+                                );
+                            }
+                        });
+                });
                 // Sharp (pixel) scaling is a shader-pass feature; the
                 // toggle persists but has no effect until then.
                 ui.checkbox(

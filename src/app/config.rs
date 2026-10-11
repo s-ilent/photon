@@ -91,6 +91,7 @@ impl PhotonApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::view::FitMode;
     use crate::app::{SortMode, ZoomReset};
 
     #[test]
@@ -107,6 +108,7 @@ mod tests {
             use_sharp_scaling: true,
             checkerboard_bg: false,
             zoom_reset: ZoomReset::Never,
+            fit_mode: FitMode::AlwaysFit,
             sort_mode: SortMode::FileSizeSmallest,
         };
 
@@ -120,6 +122,22 @@ mod tests {
         assert!(!parsed.dark_mode);
         assert_eq!(parsed.zoom_reset, ZoomReset::DimensionChange);
         assert_eq!(parsed.font_size, 16.0);
+    }
+
+    #[test]
+    fn partial_config_without_fit_mode_defaults_to_reduce_only() {
+        let parsed = parse_config("(\n    dark_mode: false,\n)");
+        assert_eq!(parsed.fit_mode, FitMode::ReduceOnly);
+    }
+
+    #[test]
+    fn always_fit_roundtrips_through_ron() {
+        let settings = AppSettings {
+            fit_mode: FitMode::AlwaysFit,
+            ..AppSettings::default()
+        };
+        let parsed = parse_config(&serialize_settings(&settings));
+        assert_eq!(parsed.fit_mode, FitMode::AlwaysFit);
     }
 
     #[test]
