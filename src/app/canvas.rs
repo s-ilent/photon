@@ -409,6 +409,11 @@ impl PhotonApp {
     /// current view (it is discarded when navigating away).
     fn show_edited(&mut self, image: edit::Rgba) {
         let (width, height) = (image.width, image.height);
+        // Keep the source's colour space so a linear image stays linear through
+        // an edit (the encoded/linear branch in the shader is unchanged).
+        let color_space = self
+            .current_color_space
+            .unwrap_or(crate::image_loader::ColorSpace::Srgb);
         let built = {
             let (Some(device), Some(queue), Some(renderer)) = (
                 self.device.as_ref(),
@@ -430,7 +435,7 @@ impl PhotonApp {
                 height,
                 false,
                 crate::image_loader::DecodedFormat::Rgba8,
-                crate::image_loader::ColorSpace::Srgb,
+                color_space,
             ))
         };
 

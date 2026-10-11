@@ -101,10 +101,12 @@ impl PhotonApp {
                 let (decoded, path_for_tx, rgba_for_res, is_active_load) = match msg_to_process {
                     Some(WorkerMessage::Load(ref req)) => {
                         let opts = crate::image_loader::DecodeOptions {
-                            // BC upload is enabled in the device-feature step; the
-                            // seam is in place but the render path is not yet
-                            // format-aware, so keep the CPU decode for now.
-                            allow_bc: false,
+                            // Compressed DDS uploads straight to VRAM when the
+                            // device supports BC textures; otherwise (and for
+                            // every other format) it CPU-decodes to RGBA8.
+                            allow_bc: device
+                                .features()
+                                .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
                             max_dim: max_dim_limit,
                         };
                         match crate::image_loader::load_image_opts(&req.path, opts) {
@@ -176,7 +178,9 @@ impl PhotonApp {
 
                 // Build the GPU-resident image: every layer, chunked, with
                 // bind groups and vertex quads. Active/Paste results hand the
-                // decoded bytes back too so copy/save can reuse them.
+                // decoded bytes back too so copy/save can reuse them — but only
+                // for RGBA8 layers: a compressed layer has no decoded pixels, so
+                // copy/save/edit re-decode from disk via the `current_rgba` fallback.
                 let upload_start = Instant::now();
                 let render_ctx = crate::render::RenderContext {
                     device: &device,
@@ -195,8 +199,9 @@ impl PhotonApp {
                 ));
                 let _upload_time = upload_start.elapsed();
 
+                let is_rgba8 = decoded.format == crate::image_loader::DecodedFormat::Rgba8;
                 let rgba_for_res =
-                    rgba_for_res.or_else(|| is_active_load.then_some(decoded.layers));
+                    rgba_for_res.or_else(|| (is_active_load && is_rgba8).then_some(decoded.layers));
 
                 if let Some(ref path) = path_for_tx {
                     log::info!(
@@ -266,7 +271,9 @@ impl PhotonApp {
             // different size (per the configured ZoomReset behavior).
             let (w, h) = cached.dims();
             let dimensions_changed = self.image_dimensions != Some((w, h));
+            let color_space = cached.color_space;
             self.displayed_image = Some(cached);
+            self.current_color_space = Some(color_space);
             self.pending_window_fit = true;
             self.current_layer = 0;
             self.layers_are_cubemap = self
@@ -355,7 +362,9 @@ impl PhotonApp {
                             let (width, height) = image.dims();
                             let dimensions_changed = self.image_dimensions != Some((width, height));
                             let is_cubemap = image.is_cubemap;
+                            let color_space = image.color_space;
                             self.displayed_image = Some(image);
+                            self.current_color_space = Some(color_space);
                             self.pending_window_fit = true;
                             self.current_layer = 0;
                             self.layers_are_cubemap = is_cubemap;

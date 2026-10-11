@@ -19,6 +19,16 @@ impl app::PhotonApp {
                 ui.label(format!("{}x{}", w, h));
                 ui.separator();
             }
+            if let Some(color_space) = self.current_color_space {
+                let label = match color_space {
+                    crate::image_loader::ColorSpace::Srgb => "sRGB",
+                    crate::image_loader::ColorSpace::Linear => "Linear",
+                };
+                ui.label(label).on_hover_text(
+                    "Image colour space; linear sources are encoded for display",
+                );
+                ui.separator();
+            }
             ui.label(format!(
                 "Zoom: {}",
                 app::view::zoom_percent_label(self.zoom)

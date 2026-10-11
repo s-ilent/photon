@@ -213,6 +213,9 @@ pub struct PhotonApp {
     pub(crate) is_loading: bool,
     pub(crate) target_path: Option<PathBuf>,
     pub(crate) image_dimensions: Option<(u32, u32)>,
+    /// Colour space of the displayed image (Roadmap §9): shown in the info bar
+    /// and used when re-uploading an edit so a linear source stays linear.
+    pub(crate) current_color_space: Option<crate::image_loader::ColorSpace>,
     pub(crate) zoom: f32,
     pub(crate) pan: egui::Vec2,
     pub(crate) selection: Option<egui::Rect>,
@@ -298,6 +301,7 @@ impl PhotonApp {
             is_loading: false,
             target_path: None,
             image_dimensions: None,
+            current_color_space: None,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             selection: None,

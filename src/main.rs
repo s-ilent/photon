@@ -129,6 +129,11 @@ fn main() -> eframe::Result<()> {
                 // guard reads the live limit, so it adapts automatically).
                 wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(egui_wgpu::WgpuSetupCreateNew {
                     device_descriptor: Arc::new(|adapter| wgpu::DeviceDescriptor {
+                        // Block-compressed (BC1–BC7) DDS upload needs this; request
+                        // it only where the adapter supports it (the loader falls
+                        // back to a CPU decode otherwise).
+                        required_features: adapter.features()
+                            & wgpu::Features::TEXTURE_COMPRESSION_BC,
                         required_limits: wgpu::Limits {
                             max_texture_dimension_2d: 16384
                                 .min(adapter.limits().max_texture_dimension_2d),
