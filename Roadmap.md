@@ -141,21 +141,32 @@ depth internally. **Filters are compute-shader work** — see §5b.
       (zero-padded); search-and-replace; live preview; reorderable list (order
       matters for counters).
 
-## 5b. Image filters are compute-shader work (decision)
+## 5b. Filters: compute shader (future), CPU fallback retained
 
-**Decision (2026-10-11): image filters are implemented as `wgpu` compute
-shaders, not CPU loops.** A compute pass reads the input texture and writes an
-output texture — markedly faster than the CPU path for convolution on real
-images, and it reuses the device/queue and GPU-resident textures the render
-pass already owns. The kernels in Appendix A are the specs for these shaders.
+**Direction (2026-10-11): image filters should move to a `wgpu` compute pass**
+(input texture → output texture) — faster than CPU loops, especially for
+convolution. This is a *future* direction, not a now-mandate:
 
-Consequence to plan for: the batch engine (`app/batch.rs`) is deliberately
-CPU-only today, so the **filter steps of the batch chain** need a GPU path.
-Share one filter module between the batch view and the interactive preview
-rather than reimplementing the kernels on the CPU. Non-filter chain steps
-(format conversion, resize, rotate/flip, grayscale/negative) stay CPU as they
-are. This also applies to any future effect filters (e.g. an interactive
-filter preview) — do not add a CPU convolution routine.
+- **Keep the CPU implementations as the fallback path.** Core functions must
+  work without a GPU (headless, no adapter, exotic formats); today's
+  `app/batch.rs` operations and the Appendix-A kernels are that fallback. Do
+  **not** delete them when the compute path lands — the compute pass is an
+  accelerator, not a replacement.
+- **Resampling (resize) stays CPU** for now (decided 2026-10-11).
+- Convolution and future effect filters are the compute-shader target; the
+  Appendix-A kernels are their specs.
+
+Consequence: the CPU batch engine keeps the cheap chain steps (format, resize,
+rotate/flip, grayscale/negative); when a filter step is added before the
+compute path exists, it runs on the retained CPU path. Later, filters gain a
+GPU path sharing kernels with any interactive preview.
+
+**GPU test harness (needed).** Photon has no way to test `wgpu` code today
+(AGENTS.md forbids unit-testing anything that needs a live device). Build a
+headless harness — a `tests/` integration test that acquires an adapter
+(Vulkan is available on this machine) and runs a trivial compute pass, skipping
+cleanly when no adapter exists — as the substrate for the compute-filter work
+and the existing render pass.
 
 ## 6. Panorama creator
 
@@ -277,8 +288,8 @@ Mapped onto the existing arcs (`Todo.md`: shader milestones M1–M5).
 1. **Command registry + params serialisation** (§1) — prerequisite for §5, §10.
 2. **Near-term viewing polish** (§3): fit modes, zoom set, Exif auto-rotate,
    pixel readout, tile-repeat view. Small, high-visibility.
-3. **Batch conversion + chain**, and **batch rename** (§5). The filter steps of
-   the chain wait on the **compute-shader filter pass** (§5b).
+3. **Batch conversion + chain**, and **batch rename** (§5). The chain's filter
+   steps wait on the compute path (§5b); resampling stays CPU.
 4. **Editing core** (§4): rotate / flip / crop, grayscale / negative, undo.
 5. **Metadata** (§9): Exif panel + Image Info; ICC when the shader pass is ready.
 6. **Browser** (§7) with the persistent thumbnail cache; then **desktop
@@ -287,9 +298,9 @@ Mapped onto the existing arcs (`Todo.md`: shader milestones M1–M5).
 8. **CLI + rebinding** (§10) — near-free once §1 exists.
 9. **Broad codec expansion** (§8) — JXL, SVG, archives, lossless JPEG, RAW.
 
-The shader arc (`M3` BCn, `M4` HDR/tonemap, `M5` cubemap view, plus the
-**compute-shader filter pass** of §5b) runs in parallel and is orthogonal; it
-just has to be kept, not bolted on.
+The shader arc (`M3` BCn, `M4` HDR/tonemap, `M5` cubemap view, the **GPU test
+harness** and the future **compute filter pass** of §5b) runs in parallel and is
+orthogonal; it just has to be kept, not bolted on.
 
 ---
 

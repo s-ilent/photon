@@ -10,9 +10,9 @@
 //! **[`run_batch`] fans the jobs out across CPU cores with `rayon`.**
 //!
 //! Scope note: this CPU engine covers the cheap chain steps (format, resize,
-//! rotate/flip, grayscale/negative). **Image filters are compute-shader work**
-//! (Roadmap §5b) — the convolution kernels are implemented as a `wgpu` compute
-//! pass and are deliberately NOT a CPU routine here.
+//! rotate/flip, grayscale/negative). Convolution/effect filters are intended to
+//! move to a `wgpu` compute pass (`Roadmap.md` §5b); **this CPU path is the
+//! retained fallback**, so a filter step may run here until that lands.
 
 use std::io::{Seek, Write};
 use std::path::PathBuf;

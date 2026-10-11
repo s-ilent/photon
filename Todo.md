@@ -95,7 +95,8 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
       `app/batch.rs` — `Operation` chain (rotate/flip/grayscale/negative/resize
       with the resample filters), `OutputFormat` encoders, overwrite policy,
       per-file `FileStatus`, `rayon` `par_iter` `run_batch`. Remaining:
-      convolution filters (**compute shader — `Roadmap.md` §5b**, not CPU),
+      convolution filters (**CPU fallback now; compute path is future —
+      `Roadmap.md` §5b**),
       per-format save options, recipe import/export, and the "Convert…" UI
       dialog + progress.
 - [ ] **Content-based format detection** (`Roadmap.md` §5) — sniff bytes,
@@ -125,10 +126,16 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
 - [ ] **M3: native BCn upload** — BC1–BC7 DDS bytes straight to VRAM (no CPU
       decode); per-format pipeline variants (sRGB/blocky sample types), tile
       reuse across faces. Fallback to CPU decode stays for exotic formats.
-- [ ] **Compute-shader image filters** (`Roadmap.md` §5b) — convolution kernels
-      (Appendix A) as a `wgpu` compute pass (input texture → output texture),
-      shared by the batch chain and any interactive filter preview. Faster than
-      CPU, especially convolution. **Do not add a CPU convolution routine.**
+- [ ] **GPU test harness** (`Roadmap.md` §5b) — headless `tests/` integration
+      test that acquires a Vulkan adapter and runs a trivial compute pass,
+      skipping cleanly when no adapter exists. The substrate for testing wgpu
+      code (the compute filters, the render pass) which AGENTS.md currently
+      forbids unit-testing.
+- [ ] **Compute-shader image filters (future)** (`Roadmap.md` §5b) — move
+      convolution/effect filters to a `wgpu` compute pass (input texture →
+      output texture), faster than CPU especially for convolution. **Keep the
+      CPU implementations as the fallback path**; resampling (resize) stays
+      CPU. Not a now-mandate.
 - [ ] **M4: HDR + tonemap** — `Rgba32Float` (needs `float32_filterable` or
       nearest sampling), EXR and BC6H float paths, exposure/gamma tonemap.
       BC6H currently uses the RGBA8 path; revisit `imagef32_from_dds`.
