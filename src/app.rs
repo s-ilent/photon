@@ -19,9 +19,12 @@ mod clipboard;
 mod config;
 mod loader;
 mod saver;
-// Batch conversion engine (Roadmap.md §5) is landing next.
+// Batch conversion engine (Roadmap.md §5).
 #[allow(dead_code)]
 mod batch;
+// Interactive editing ops + undo (Roadmap.md §4) — landing next.
+#[allow(dead_code)]
+mod edit;
 pub(crate) mod settings;
 mod theme;
 // Fit/zoom geometry (Roadmap.md §3). `fit_zoom`/`zoom_limits` are wired into
