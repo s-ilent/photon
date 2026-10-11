@@ -4,31 +4,36 @@ Living worklist, re-prioritized 2026-10-11 after the config/logging/shortcut
 pass. Per CLAUDE.md, do not delete pre-existing dead code opportunistically;
 list it here and address it deliberately.
 
-The long horizon — the full forward feature map, grouped by capability — lives
-in `Roadmap.md`. This file is the near-term, moving slice of it; when something
-on the roadmap comes into focus, add it here with a concrete plan.
+The long horizon — the full forward feature map, grouped by capability, with
+the decided scope and the explicit out-of-scope list — lives in `Roadmap.md`.
+This file is the near-term, moving slice of it; when something on the roadmap
+comes into focus, add it here with a concrete plan.
 
 ---
 
 ## Recommended order
 
-What's next, in the order I'd do it:
+What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
 
 1. **Shader pass M3: native BCn upload** — compressed DDS bytes straight to
    VRAM (no CPU decode), per-format pipeline variants. The pass machinery
    (M1/M2) landed 2026-10-11; this is the next chunk of the arc.
 2. **Command registry + params serialisation** (`Roadmap.md` §1) — the spine
-   that makes key-configuration, batch, and a scripting CLI cheap; build it
-   before those three so they share one dispatch table.
-3. **Batch converter** — `rayon` `par_iter` convert/save with a real
-   "Convert…" dialog. Independent of the shader work; can slot in anytime
-   (richer design in `Roadmap.md` §7).
-4. **Near-term viewing polish** (`Roadmap.md` §3) — fit modes, zoom set
+   that makes key-rebinding, the CLI, and batch cheap; build it before those
+   so they share one dispatch table.
+3. **Near-term viewing polish** (`Roadmap.md` §3) — fit modes, zoom set
    (100 % / to-desktop / lock), Exif auto-rotate on load, status-bar pixel
    readout, tile-repeat ("seamless texture") view. Small, high-visibility.
-5. **Texture inspection sidebar** — DEFERRED: the user is designing this.
+4. **Batch conversion + operation chain**, then **batch rename**
+   (`Roadmap.md` §5) — `rayon` `par_iter`, a real "Convert…" dialog.
+5. **Light editing core** (`Roadmap.md` §4) — rotate / flip / crop,
+   grayscale / negative, edit undo.
+6. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC with the
+   shader pass.
+7. **Full browser** (`Roadmap.md` §7) with the persistent thumbnail cache.
+8. **Texture inspection sidebar** — DEFERRED: the user is designing this.
    Implement only against their design when it's ready.
-6. **Property map mode** — when a spec exists.
+9. **Property map mode** — when a spec exists.
 
 ---
 
@@ -41,10 +46,18 @@ What's next, in the order I'd do it:
       the pipeline decodes/uploads mip 0 only
       (`decode_layers_mipmaps_dds(.., 0..1)`), so a mip selector needs either
       per-mip decode on demand or the full chain at load.
-- [ ] **Batch converter** (Plan.md) — `rayon` `par_iter` convert/save; fonts
-      a real "Convert…" dialog. Depends on nothing; medium-large.
-- [ ] **ICC / color profiles** (Plan.md) — read ICC and apply in the shader
-      pass; deferred with it.
+- [ ] **Batch converter + operation chain** (`Roadmap.md` §5) — `rayon`
+      `par_iter` convert/save; a real "Convert…" dialog with per-file status,
+      overwrite policy, continue-on-error. Chain ops: format + save options,
+      resize (resample filters), rotate/flip/grayscale/negative, convolution
+      filters. Needs the command registry (`Roadmap.md` §1) for the chain.
+- [ ] **Batch rename** (`Roadmap.md` §5) — mask tokens (file/image attrs,
+      counters), search-and-replace, live preview, reorderable list.
+- [ ] **Full browser** (`Roadmap.md` §7) — thumbnail grid + disk cache, views,
+      sort, filters, folder tree/history, preview pane, file ops.
+- [ ] **Panorama creator** (`Roadmap.md` §6) — concatenation stitch only.
+- [ ] **ICC / color profiles** (`Roadmap.md` §9) — read ICC and apply in the
+      shader pass; deferred with it.
 - [ ] **Watcher niceties** (post-MVP folder watching, shipped 2026-10-11) —
       handle the watched directory itself being deleted/renamed (currently
       the watcher just stops producing useful listings); consider a
