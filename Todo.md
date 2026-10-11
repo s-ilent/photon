@@ -48,7 +48,7 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
       per-mip decode on demand or the full chain at load.
 - [~] **Batch converter + operation chain** (`Roadmap.md` §5) — engine core
       DONE (`app/batch.rs`, 2026-10-11): operations + formats + overwrite +
-      `std::thread` parallel driver (`rayon` not in the lock). REMAINING: the
+      `rayon` `par_iter` parallel driver. REMAINING: the
       "Convert…" dialog + live progress, per-format save options, convolution
       filters, recipe import/export, and menu/registry wiring.
 - [ ] **Batch rename** (`Roadmap.md` §5) — mask tokens (file/image attrs,
@@ -94,7 +94,7 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
 - [x] **Batch conversion engine** (`Roadmap.md` §5) — DONE 2026-10-11 (core):
       `app/batch.rs` — `Operation` chain (rotate/flip/grayscale/negative/resize
       with the resample filters), `OutputFormat` encoders, overwrite policy,
-      per-file `FileStatus`, `std::thread` parallel `run_batch`. Remaining:
+      per-file `FileStatus`, `rayon` `par_iter` `run_batch`. Remaining:
       convolution filters, per-format save options, recipe import/export, and
       the "Convert…" UI dialog + progress.
 - [ ] **Content-based format detection** (`Roadmap.md` §5) — sniff bytes,
@@ -172,9 +172,10 @@ the escalation path if a picked crate needs a fix upstream lacks.
       loader errors; first job: replace the `"Failed to decode"` prefix
       classification between `image_loader.rs` and `app/loader.rs`),
       `bytemuck` (GPU staging in the shader pass), `glam` (cubemap view
-      math), `half` (f16/HDR), `rayon` (batch converter), `chrono`/`jiff`
+      math), `half` (f16/HDR), `chrono`/`jiff`
       (human-readable dates), `humansize` (file sizes). Removed as unused
-      2026-10-11 except where noted.
+      2026-10-11 except where noted. **`rayon` reintroduced 2026-10-11** (batch
+      engine driver).
 
 ---
 
@@ -184,8 +185,8 @@ the escalation path if a picked crate needs a fix upstream lacks.
 - **Concern split** — `AppSettings`/`SortMode`/`ZoomReset` moved to
   `app/settings.rs` (re-exported) to cut `app.rs` contention.
 - **Pixel readout + tile-repeat view** (Roadmap §3).
-- **Batch conversion engine core** — `app/batch.rs` (Roadmap §5; `std::thread`,
-  not `rayon` — not in the lock).
+- **Batch conversion engine core** — `app/batch.rs` (Roadmap §5; `rayon`
+  `par_iter`).
 - 80 unit tests; build and clippy warning-free.
 
 ### 2026-10-11 (batch 2: viewing/extras)

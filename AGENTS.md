@@ -91,7 +91,7 @@ src/
     ├── canvas.rs        # Image workspace: zoom/pan/selection drawing, checkerboard background, input handling per mouse mode.
     ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, fit_zoom, zoom_limits (adaptive, image-derived), zoom_to_fill, ZoomLock, image_pixel_at, html_hex, tile_offsets. fit/zoom + pixel readout + tile-repeat wired into canvas/info bar; ZoomLock awaits the Settings UI.
     ├── settings.rs      # AppSettings + SortMode + ZoomReset (split out of app.rs), re-exported from app.rs so paths are unchanged.
-    ├── batch.rs         # Batch conversion engine (Roadmap §5): Operation chain, OutputFormat, ConversionJob, convert_file/run_batch (std::thread driver). Engine only — no UI yet (`#[allow(dead_code)]`).
+    ├── batch.rs         # Batch conversion engine (Roadmap §5): Operation chain, OutputFormat, ConversionJob, convert_file/run_batch (`rayon` par_iter driver). Engine only — no UI yet (`#[allow(dead_code)]`).
     ├── clipboard.rs     # Copy (with optional crop from selection) and paste via arboard; current_rgba() source of truth for displayed bytes.
     ├── config.rs        # Settings persistence: config.ron via serde + RON, config dir via the directories crate.
     ├── saver.rs         # Save / Save Selection As: rfd save-as dialog, background encode, bottom-bar status feedback.
@@ -123,7 +123,7 @@ There are two background threads plus the main (render) thread, connected by `st
 
 Zoom/pan reset on image switch per the configured `ZoomReset` setting (`always` / `dimension_change` / `never`, default `dimension_change`) — see the tests in `app/loader.rs`. All settings persist to `config.ron` (serde + RON, `#[serde(default)]` so partial files load; directory from the `directories` crate, overridable with `PHOTON_CONFIG_DIR`). Settings are rewritten only when they actually change, so hand edits survive while nothing is touched.
 
-All concurrency is raw `std::thread` + `mpsc`; the previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching).
+Viewer concurrency is raw `std::thread` + `mpsc`; the batch engine additionally uses `rayon`'s `par_iter`. The previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching), `rayon` (batch parallelism).
 
 ### GPU / render pipeline
 

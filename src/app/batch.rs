@@ -7,9 +7,7 @@
 //! `PhotonApp`, and no wgpu here — the batch window and recipe import/export
 //! land on top of these functions later.
 //!
-//! Parallelism uses `std::thread::scope` because `rayon` is intentionally not a
-//! dependency yet (see `Todo.md`); `rayon`'s `par_iter` is the intended later
-//! swap for [`run_batch`].
+//! [`run_batch`] fans the jobs out across CPU cores with `rayon`.
 
 use std::io::{Seek, Write};
 use std::path::PathBuf;
@@ -332,42 +330,12 @@ pub(crate) fn convert_file(job: &ConversionJob, policy: OverwritePolicy) -> File
 /// Convert every job, in parallel, returning one status per job in the same
 /// order as `jobs`. Failures are per-file and never abort the batch.
 ///
-/// Uses `std::thread::scope` with a worker count bounded by
-/// `available_parallelism`; `rayon`'s `par_iter` is the intended later swap.
+/// `rayon`'s work-stealing `par_iter` bounds (and reuses) the thread pool;
+/// `collect` preserves input order, so callers can zip statuses to jobs.
 pub(crate) fn run_batch(jobs: &[ConversionJob], policy: OverwritePolicy) -> Vec<FileStatus> {
-    if jobs.is_empty() {
-        return Vec::new();
-    }
-
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(jobs.len());
-
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let results: std::sync::Mutex<Vec<Option<FileStatus>>> =
-        std::sync::Mutex::new((0..jobs.len()).map(|_| None).collect());
-
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if index >= jobs.len() {
-                        break;
-                    }
-                    let status = convert_file(&jobs[index], policy);
-                    results.lock().expect("batch results mutex poisoned")[index] = Some(status);
-                }
-            });
-        }
-    });
-
-    results
-        .into_inner()
-        .expect("batch results mutex poisoned")
-        .into_iter()
-        .map(|slot| slot.expect("every job slot is filled by a worker"))
+    use rayon::prelude::*;
+    jobs.par_iter()
+        .map(|job| convert_file(job, policy))
         .collect()
 }
 
