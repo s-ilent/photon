@@ -16,13 +16,81 @@ pub struct DecodedImage {
     pub is_cubemap: bool,
 }
 
+/// Typed decode failure, replacing the old `Result<_, String>` + string-prefix
+/// classification (Roadmap §8). The variants form the fixed vocabulary the
+/// roadmap calls for; the payload carries the underlying error text so the
+/// user-visible overlay message stays as detailed as before.
+///
+/// Some variants are not constructed yet — they are the agreed vocabulary for
+/// the broader codec work in §8 — so the whole enum is allowed to be dead.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub enum DecodeError {
+    /// Recognized format that this build cannot decode, or malformed pixel
+    /// data for a format it can. Shown as the "unsupported format" overlay.
+    UnsupportedFormat(String),
+    /// The file's format could not be determined.
+    UnknownFormat(String),
+    OutOfMemory,
+    ColorNotSupported,
+    ReadError,
+    WriteError,
+    /// Malformed or inconsistent file data (bad header, truncated stream,
+    /// layer byte count that doesn't match the reported dimensions).
+    InvalidData(String),
+    FileNotFound(String),
+    Aborted,
+    GrayscaleOnly,
+    OtherComponentsRequired,
+    SizeNotSupported,
+    CantGetInformation,
+}
+
+impl DecodeError {
+    /// Whether this failure should surface as the "unsupported format" overlay
+    /// rather than the generic error overlay. Reproduces the old
+    /// `e.starts_with("Failed to decode")` classification exactly: decode-time
+    /// failures (image decode, DDS header/decode/size checks) are format
+    /// errors; open and format-guess failures are not.
+    pub fn is_unsupported_format(&self) -> bool {
+        matches!(
+            self,
+            DecodeError::UnsupportedFormat(_) | DecodeError::InvalidData(_)
+        )
+    }
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecodeError::UnsupportedFormat(e) => write!(f, "Failed to decode image: {}", e),
+            DecodeError::UnknownFormat(e) => write!(f, "Failed to guess format: {}", e),
+            DecodeError::OutOfMemory => write!(f, "Out of memory while decoding image"),
+            DecodeError::ColorNotSupported => write!(f, "Image colour type is not supported"),
+            DecodeError::ReadError => write!(f, "Failed to read image data"),
+            DecodeError::WriteError => write!(f, "Failed to write image data"),
+            DecodeError::InvalidData(e) => write!(f, "Failed to decode image: {}", e),
+            DecodeError::FileNotFound(e) => write!(f, "Failed to open file: {}", e),
+            DecodeError::Aborted => write!(f, "Image decoding was aborted"),
+            DecodeError::GrayscaleOnly => write!(f, "Only grayscale images are supported"),
+            DecodeError::OtherComponentsRequired => {
+                write!(f, "Image requires other colour components")
+            }
+            DecodeError::SizeNotSupported => write!(f, "Image dimensions are not supported"),
+            DecodeError::CantGetInformation => write!(f, "Could not read image information"),
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
 /// Load an image and return its layers as RGBA pixels with dimensions.
 ///
 /// `.dds` files are routed through `image_dds` (which wraps `ddsfile` for
 /// header parsing and decodes BC1–BC7 + uncompressed variants). All other
 /// supported formats go through the `image` crate as before and produce a
 /// single layer.
-pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
+pub fn load_image(path: &Path) -> Result<DecodedImage, DecodeError> {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -32,16 +100,17 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
         return load_dds(path);
     }
 
-    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let file = std::fs::File::open(path)
+        .map_err(|e| DecodeError::FileNotFound(e.to_string()))?;
     let reader = std::io::BufReader::new(file);
 
     let img_reader = ::image::ImageReader::new(reader)
         .with_guessed_format()
-        .map_err(|e| format!("Failed to guess format: {}", e))?;
+        .map_err(|e| DecodeError::UnknownFormat(e.to_string()))?;
 
     let img = img_reader
         .decode()
-        .map_err(|e| format!("Failed to decode image: {}", e))?;
+        .map_err(|e| DecodeError::UnsupportedFormat(e.to_string()))?;
 
     let (w, h) = (img.width(), img.height());
     let rgba = img.to_rgba8();
@@ -61,16 +130,17 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, String> {
 /// Every layer (cubemap face or array entry) is decoded; the layers are
 /// stacked vertically inside the file by `image_dds`, so we split the stack
 /// back into per-face buffers here.
-fn load_dds(path: &Path) -> Result<DecodedImage, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+fn load_dds(path: &Path) -> Result<DecodedImage, DecodeError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| DecodeError::FileNotFound(e.to_string()))?;
     let dds = image_dds::ddsfile::Dds::read(file)
-        .map_err(|e| format!("Failed to decode image: Failed to read DDS header: {}", e))?;
+        .map_err(|e| DecodeError::InvalidData(format!("Failed to read DDS header: {}", e)))?;
 
     let layer_count = dds_layer_count(&dds).min(MAX_DECODED_LAYERS);
     let img = image_dds::SurfaceRgba8::decode_layers_mipmaps_dds(&dds, 0..layer_count, 0..1)
-        .map_err(|e| format!("Failed to decode image: DDS decode failed: {}", e))?
+        .map_err(|e| DecodeError::InvalidData(format!("DDS decode failed: {}", e)))?
         .into_image()
-        .map_err(|e| format!("Failed to decode image: DDS decode failed: {}", e))?;
+        .map_err(|e| DecodeError::InvalidData(format!("DDS decode failed: {}", e)))?;
 
     // The decoded image stacks all layers vertically, so its reported height
     // is count × face-height; the true per-layer dimensions are in the header.
@@ -78,12 +148,12 @@ fn load_dds(path: &Path) -> Result<DecodedImage, String> {
     let layer_bytes = (w as usize) * (h as usize) * 4;
     let raw = img.into_raw();
     if layer_bytes == 0 || raw.len() % layer_bytes != 0 {
-        return Err(format!(
-            "Failed to decode image: DDS decode produced {} bytes, not a multiple of {}x{}x4",
+        return Err(DecodeError::InvalidData(format!(
+            "DDS decode produced {} bytes, not a multiple of {}x{}x4",
             raw.len(),
             w,
             h
-        ));
+        )));
     }
     let layers = raw.chunks_exact(layer_bytes).map(<[u8]>::to_vec).collect();
 
@@ -225,5 +295,65 @@ mod tests {
         assert_eq!((decoded.width, decoded.height), (w, h));
         assert_eq!(decoded.layers, layers_px);
         assert!(!decoded.is_cubemap);
+    }
+
+    /// A missing file is an open failure, not a format error.
+    #[test]
+    fn test_missing_file_is_not_format_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("does-not-exist.png");
+
+        let err = match load_image(&path) {
+            Ok(_) => panic!("missing file must fail"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, DecodeError::FileNotFound(_)));
+        assert!(!err.is_unsupported_format(), "open failure is not a format error");
+        assert!(err.to_string().starts_with("Failed to open file:"));
+    }
+
+    /// Malformed DDS bytes reach the header/decode path and classify as a
+    /// format error (matching the old "Failed to decode" prefix behaviour).
+    #[test]
+    fn test_corrupt_dds_is_format_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("corrupt.dds");
+        std::fs::write(&path, b"not a real dds file").expect("write");
+
+        let err = match load_image(&path) {
+            Ok(_) => panic!("corrupt dds must fail"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, DecodeError::InvalidData(_)));
+        assert!(err.is_unsupported_format(), "decode failure is a format error");
+    }
+
+    /// The variant -> classification mapping for the whole vocabulary.
+    #[test]
+    fn test_unsupported_format_classification() {
+        let format_errors = [
+            DecodeError::UnsupportedFormat("x".into()),
+            DecodeError::InvalidData("x".into()),
+        ];
+        for e in &format_errors {
+            assert!(e.is_unsupported_format(), "{e:?} should be a format error");
+        }
+
+        let other_errors = [
+            DecodeError::UnknownFormat("x".into()),
+            DecodeError::FileNotFound("x".into()),
+            DecodeError::OutOfMemory,
+            DecodeError::ColorNotSupported,
+            DecodeError::ReadError,
+            DecodeError::WriteError,
+            DecodeError::Aborted,
+            DecodeError::GrayscaleOnly,
+            DecodeError::OtherComponentsRequired,
+            DecodeError::SizeNotSupported,
+            DecodeError::CantGetInformation,
+        ];
+        for e in &other_errors {
+            assert!(!e.is_unsupported_format(), "{e:?} is not a format error");
+        }
     }
 }

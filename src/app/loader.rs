@@ -105,17 +105,16 @@ impl PhotonApp {
                             }
                             Err(e) => {
                                 // Surface the error to the main thread instead of swallowing it.
-                                // Classify by the prefix of the string error from image_loader:
-                                //   "Failed to decode image" → UnsupportedFormat
-                                //   anything else (open/guess) → Error
-                                // The fallback is Error so an unknown prefix yields the more
-                                // general overlay — never a misleadingly specific one.
-                                let is_format_error = e.starts_with("Failed to decode");
+                                // The typed `DecodeError` classifies itself: decode-time
+                                // failures (bad/malformed pixel data) select the
+                                // UnsupportedFormat overlay; open and format-guess
+                                // failures fall back to the general Error overlay.
+                                let is_format_error = e.is_unsupported_format();
                                 log::warn!("Failed to load image {:?}: {}", req.path, e);
                                 let _ = res_tx.send(LoadResult::Failed {
                                     path: Some(req.path.clone()),
                                     is_format_error,
-                                    message: e,
+                                    message: e.to_string(),
                                 });
                                 continue;
                             }
