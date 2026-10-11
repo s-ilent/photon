@@ -272,8 +272,10 @@ impl PhotonApp {
             let (w, h) = cached.dims();
             let dimensions_changed = self.image_dimensions != Some((w, h));
             let color_space = cached.color_space;
+            let hdr = cached.hdr;
             self.displayed_image = Some(cached);
             self.current_color_space = Some(color_space);
+            self.current_hdr = hdr;
             self.pending_window_fit = true;
             self.current_layer = 0;
             self.layers_are_cubemap = self
@@ -363,8 +365,10 @@ impl PhotonApp {
                             let dimensions_changed = self.image_dimensions != Some((width, height));
                             let is_cubemap = image.is_cubemap;
                             let color_space = image.color_space;
+                            let hdr = image.hdr;
                             self.displayed_image = Some(image);
                             self.current_color_space = Some(color_space);
+                            self.current_hdr = hdr;
                             self.pending_window_fit = true;
                             self.current_layer = 0;
                             self.layers_are_cubemap = is_cubemap;
@@ -722,6 +726,7 @@ mod tests {
                     height: *h,
                     is_cubemap: false,
                     color_space: crate::image_loader::ColorSpace::Srgb,
+                    hdr: false,
                     layers: vec![crate::render::Layer { tiles: Vec::new() }],
                 }),
             );

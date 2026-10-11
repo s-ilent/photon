@@ -218,6 +218,9 @@ pub struct PhotonApp {
     /// Colour space of the displayed image (Roadmap §9): shown in the info bar
     /// and used when re-uploading an edit so a linear source stays linear.
     pub(crate) current_color_space: Option<crate::image_loader::ColorSpace>,
+    /// True when the displayed image is a float/HDR source (tonemapped in the
+    /// shader); shown in the info bar.
+    pub(crate) current_hdr: bool,
     pub(crate) zoom: f32,
     pub(crate) pan: egui::Vec2,
     pub(crate) selection: Option<egui::Rect>,
@@ -304,6 +307,7 @@ impl PhotonApp {
             target_path: None,
             image_dimensions: None,
             current_color_space: None,
+            current_hdr: false,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             selection: None,

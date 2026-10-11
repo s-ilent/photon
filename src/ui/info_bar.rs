@@ -24,9 +24,13 @@ impl app::PhotonApp {
                     crate::image_loader::ColorSpace::Srgb => "sRGB",
                     crate::image_loader::ColorSpace::Linear => "Linear",
                 };
-                ui.label(label).on_hover_text(
-                    "Image colour space; linear sources are encoded for display",
-                );
+                ui.label(label)
+                    .on_hover_text("Image colour space; linear sources are encoded for display");
+                ui.separator();
+            }
+            if self.current_hdr {
+                ui.label("HDR")
+                    .on_hover_text("Float source, tonemapped to display range");
                 ui.separator();
             }
             ui.label(format!(

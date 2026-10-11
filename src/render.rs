@@ -173,6 +173,9 @@ pub struct RenderImage {
     /// The transfer function of the uploaded bytes; the shader encodes a
     /// linear-light source to display space.
     pub color_space: crate::image_loader::ColorSpace,
+    /// True for a float/HDR source (`Rgba16Float`); the shader tonemaps it
+    /// before the display encode.
+    pub(crate) hdr: bool,
     pub(crate) layers: Vec<Layer>,
 }
 
@@ -201,9 +204,17 @@ pub(crate) fn chunk_grid(width: u32, height: u32, max_dim: u32) -> Vec<(u32, u32
     rects
 }
 
-/// Chunked GPU form of one RGBA8 layer. The sampler is linear; a nearest
-/// sampler must not be added (sharp scaling lives in the shader).
-pub(crate) fn build_layer(rgba: &[u8], width: u32, height: u32, ctx: &RenderContext<'_>) -> Layer {
+/// Chunked GPU form of one pixel layer (`Rgba8Unorm` or `Rgba16Float`). The
+/// sampler is linear; a nearest sampler must not be added (sharp scaling lives
+/// in the shader).
+pub(crate) fn build_layer(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    bytes_per_pixel: u32,
+    ctx: &RenderContext<'_>,
+) -> Layer {
     let device = ctx.device;
     let queue = ctx.queue;
     let max_dim = ctx.max_dim;
@@ -214,7 +225,7 @@ pub(crate) fn build_layer(rgba: &[u8], width: u32, height: u32, ctx: &RenderCont
         min_filter: wgpu::FilterMode::Linear,
         ..Default::default()
     });
-    let bytes_per_row = width * 4;
+    let bytes_per_row = width * bytes_per_pixel;
 
     let tiles = chunk_grid(width, height, max_dim)
         .into_iter()
@@ -229,7 +240,7 @@ pub(crate) fn build_layer(rgba: &[u8], width: u32, height: u32, ctx: &RenderCont
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -450,10 +461,21 @@ pub(crate) fn build_render_image(
     format: crate::image_loader::DecodedFormat,
     color_space: crate::image_loader::ColorSpace,
 ) -> RenderImage {
+    let hdr = matches!(format, crate::image_loader::DecodedFormat::Float16);
     let layers = layers
         .into_iter()
         .map(|bytes| match format {
-            crate::image_loader::DecodedFormat::Rgba8 => build_layer(&bytes, width, height, ctx),
+            crate::image_loader::DecodedFormat::Rgba8 => {
+                build_layer(&bytes, width, height, wgpu::TextureFormat::Rgba8Unorm, 4, ctx)
+            }
+            crate::image_loader::DecodedFormat::Float16 => build_layer(
+                &bytes,
+                width,
+                height,
+                wgpu::TextureFormat::Rgba16Float,
+                8,
+                ctx,
+            ),
             crate::image_loader::DecodedFormat::Bc(kind) => {
                 build_bc_layer(&bytes, width, height, kind, ctx)
             }
@@ -464,6 +486,7 @@ pub(crate) fn build_render_image(
         height,
         is_cubemap,
         color_space,
+        hdr,
         layers,
     }
 }

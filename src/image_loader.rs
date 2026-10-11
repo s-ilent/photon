@@ -42,6 +42,10 @@ pub enum DecodedFormat {
     Rgba8,
     /// Block-compressed BC1–BC7, uploaded to a matching wgpu BC texture.
     Bc(BcKind),
+    /// Half-float RGBA (little-endian `f16`, 8 bytes per texel), uploaded to an
+    /// `Rgba16Float` texture. Used for HDR sources (EXR/HDR, float/BC6H DDS) so
+    /// values above 1.0 survive to the tonemap.
+    Float16,
 }
 
 /// Decode-time capabilities. `allow_bc` requests keeping BC-compressed DDS
@@ -197,16 +201,38 @@ pub fn load_image_opts(path: &Path, opts: DecodeOptions) -> Result<DecodedImage,
     img.apply_orientation(orientation);
 
     let (w, h) = (img.width(), img.height());
-    let rgba = img.to_rgba8();
+    let color_space = color_space_for_extension(extension.as_deref());
+
+    // Linear-light sources (EXR/HDR) decode to f32; keep the HDR range as
+    // half-float rather than clamping it through 8-bit.
+    let (layers, format) = if color_space == ColorSpace::Linear {
+        let rgba = img.into_rgba32f();
+        (
+            vec![pack_f16_rgba(rgba.as_raw())],
+            DecodedFormat::Float16,
+        )
+    } else {
+        (vec![img.to_rgba8().into_raw()], DecodedFormat::Rgba8)
+    };
 
     Ok(DecodedImage {
-        layers: vec![rgba.into_raw()],
+        layers,
         width: w,
         height: h,
         is_cubemap: false,
-        format: DecodedFormat::Rgba8,
-        color_space: color_space_for_extension(extension.as_deref()),
+        format,
+        color_space,
     })
+}
+
+/// Pack interleaved f32 RGBA into little-endian `f16` bytes — the layout
+/// [`DecodedFormat::Float16`] carries and an `Rgba16Float` texture uploads.
+fn pack_f16_rgba(pixels: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pixels.len() * 2);
+    for &component in pixels {
+        out.extend_from_slice(&half::f16::from_f32(component).to_le_bytes());
+    }
+    out
 }
 
 /// The colour space an `image`-crate format carries. Radiance HDR and OpenEXR
@@ -261,6 +287,36 @@ fn load_dds(path: &Path, opts: DecodeOptions) -> Result<DecodedImage, DecodeErro
         }
     }
 
+    // Float path: BC6H and uncompressed float formats decode to f32 and are kept
+    // as half-float so the HDR range survives (mip 0, all layers).
+    if dds.get_dxgi_format().is_some_and(dxgi_is_float) {
+        let img =
+            image_dds::SurfaceRgba32Float::decode_layers_mipmaps_dds(&dds, 0..layer_count, 0..1)
+                .map_err(|e| DecodeError::InvalidData(format!("DDS float decode failed: {}", e)))?
+                .into_image()
+                .map_err(|e| DecodeError::InvalidData(format!("DDS float decode failed: {}", e)))?;
+
+        let layer_floats = (w as usize) * (h as usize) * 4;
+        let raw = img.into_raw();
+        if layer_floats == 0 || raw.len() % layer_floats != 0 {
+            return Err(DecodeError::InvalidData(format!(
+                "DDS float decode produced {} components, not a multiple of {}x{}x4",
+                raw.len(),
+                w,
+                h
+            )));
+        }
+        let layers = raw.chunks_exact(layer_floats).map(pack_f16_rgba).collect();
+        return Ok(DecodedImage {
+            layers,
+            width: w,
+            height: h,
+            is_cubemap,
+            format: DecodedFormat::Float16,
+            color_space,
+        });
+    }
+
     // CPU fallback: decode every layer's mip 0 to RGBA8.
     let img = image_dds::SurfaceRgba8::decode_layers_mipmaps_dds(&dds, 0..layer_count, 0..1)
         .map_err(|e| DecodeError::InvalidData(format!("DDS decode failed: {}", e)))?
@@ -306,6 +362,26 @@ fn is_srgb_dxgi(format: image_dds::ddsfile::DxgiFormat) -> bool {
     matches!(
         format,
         BC1_UNorm_sRGB | BC2_UNorm_sRGB | BC3_UNorm_sRGB | BC7_UNorm_sRGB
+    )
+}
+
+/// True for DXGI formats that carry float (or BC6H HDR) samples: these take the
+/// `Rgba16Float` path rather than the 8-bit one. Depth/stencil float formats are
+/// excluded — they are not colour images.
+fn dxgi_is_float(format: image_dds::ddsfile::DxgiFormat) -> bool {
+    use image_dds::ddsfile::DxgiFormat::*;
+    matches!(
+        format,
+        R32G32B32A32_Float
+            | R32G32B32_Float
+            | R16G16B16A16_Float
+            | R32G32_Float
+            | R11G11B10_Float
+            | R16G16_Float
+            | R32_Float
+            | R16_Float
+            | BC6H_UF16
+            | BC6H_SF16
     )
 }
 
@@ -880,5 +956,36 @@ mod tests {
         assert_eq!(decoded.layers.len(), 1);
         assert_eq!(decoded.layers[0].len(), 16 * 2 * 2);
         assert_eq!(decoded.layers[0], blocks);
+    }
+
+    #[test]
+    fn dxgi_is_float_detects_float_and_bc6h_only() {
+        use image_dds::ddsfile::DxgiFormat::*;
+        assert!(dxgi_is_float(R32G32B32A32_Float));
+        assert!(dxgi_is_float(R16G16B16A16_Float));
+        assert!(dxgi_is_float(R32_Float));
+        assert!(dxgi_is_float(BC6H_UF16));
+        assert!(dxgi_is_float(BC6H_SF16));
+        assert!(!dxgi_is_float(BC1_UNorm));
+        assert!(!dxgi_is_float(BC7_UNorm_sRGB));
+        assert!(!dxgi_is_float(R8G8B8A8_UNorm));
+    }
+
+    /// f32 -> little-endian f16 bytes, half precision preserved for the values
+    /// HDR tonemapping cares about (including > 1.0).
+    #[test]
+    fn pack_f16_rgba_packs_little_endian_half_floats() {
+        let packed = pack_f16_rgba(&[1.0, 0.5, 2.0, -1.0]);
+        assert_eq!(packed.len(), 8, "4 components * 2 bytes");
+
+        let decoded: Vec<f32> = packed
+            .chunks_exact(2)
+            .map(|b| half::f16::from_le_bytes([b[0], b[1]]).to_f32())
+            .collect();
+        assert_eq!(decoded, vec![1.0, 0.5, 2.0, -1.0]);
+
+        // Exact bit patterns, catching endianness flips.
+        assert_eq!(&packed[0..2], &half::f16::from_f32(1.0).to_le_bytes());
+        assert_eq!(&packed[4..6], &half::f16::from_f32(2.0).to_le_bytes());
     }
 }
