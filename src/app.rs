@@ -378,12 +378,9 @@ impl PhotonApp {
 
     pub(crate) fn open_file(&mut self) {
         let file = rfd::FileDialog::new()
-            .add_filter(
-                "Images",
-                &[
-                    "png", "jpg", "jpeg", "gif", "bmp", "tiff", "webp", "dds", "exr",
-                ],
-            )
+            // Same list the directory walker uses, so the dialog and the
+            // listing can't drift apart.
+            .add_filter("Images", crate::dir_walker::SUPPORTED_EXTENSIONS)
             .pick_file();
 
         if let Some(path) = file {
