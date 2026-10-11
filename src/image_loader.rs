@@ -988,4 +988,111 @@ mod tests {
         assert_eq!(&packed[0..2], &half::f16::from_f32(1.0).to_le_bytes());
         assert_eq!(&packed[4..6], &half::f16::from_f32(2.0).to_le_bytes());
     }
+
+    /// Build an `R32G32B32A32_Float` DDS whose `data` is `w*h*4` little-endian
+    /// f32 values cycling `pattern`, and write it to `path`.
+    fn write_float32_dds(path: &std::path::Path, w: u32, h: u32, pattern: &[f32]) {
+        let data: Vec<u8> = (0..(w * h * 4) as usize)
+            .flat_map(|i| pattern[i % pattern.len()].to_le_bytes())
+            .collect();
+        assert_eq!(data.len(), (w * h * 4 * 4) as usize);
+        let dds = new_dxgi_dds(w, h, image_dds::ddsfile::DxgiFormat::R32G32B32A32_Float);
+        write_dds_with_data(path, dds, data);
+    }
+
+    /// An uncompressed float DDS decodes to `Float16` linear pixels: 8 bytes per
+    /// texel, and the HDR values (> 1.0) survive the f32 -> f16 round-trip.
+    #[test]
+    fn dds_float32_decodes_to_float16() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("hdr_f32.dds");
+
+        let (w, h) = (8u32, 8u32);
+        // Round values (exact in f16) including one above 1.0.
+        let pattern = [2.0f32, 0.5, 4.0, 1.0];
+        let floats: Vec<f32> = (0..(w * h * 4) as usize)
+            .map(|i| pattern[i % pattern.len()])
+            .collect();
+        write_float32_dds(&path, w, h, &pattern);
+
+        let decoded = load_image_opts(
+            &path,
+            DecodeOptions {
+                allow_bc: false,
+                max_dim: u32::MAX,
+            },
+        )
+        .expect("load_image_opts ok");
+
+        assert_eq!(decoded.format, DecodedFormat::Float16);
+        assert_eq!(
+            decoded.color_space,
+            ColorSpace::Linear,
+            "float DDS is linear-light regardless of allow_bc"
+        );
+        assert_eq!((decoded.width, decoded.height), (w, h));
+        assert_eq!(decoded.layers.len(), 1);
+        assert_eq!(decoded.layers[0].len(), (w * h * 8) as usize, "8 bytes/texel");
+
+        let got: Vec<f32> = decoded.layers[0]
+            .chunks_exact(2)
+            .map(|b| half::f16::from_le_bytes([b[0], b[1]]).to_f32())
+            .collect();
+        assert_eq!(got, floats, "f16 round-trip must reproduce the f32 input");
+    }
+
+    /// A BC6H (HDR) DDS takes the float path: shape is `Float16`/linear with 8
+    /// bytes per texel. Only the shape is asserted — the block bytes are opaque.
+    #[test]
+    fn dds_bc6h_hdr_decodes_to_float16() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bc6h.dds");
+
+        let (w, h) = (4u32, 4u32);
+        // One 16-byte BC6H block covers the whole 4x4 image.
+        let block: Vec<u8> = (0..16u8).collect();
+        let dds = new_dxgi_dds(w, h, image_dds::ddsfile::DxgiFormat::BC6H_UF16);
+        write_dds_with_data(&path, dds, block);
+
+        let decoded = load_image_opts(
+            &path,
+            DecodeOptions {
+                allow_bc: false,
+                max_dim: u32::MAX,
+            },
+        )
+        .expect("load_image_opts ok");
+
+        assert_eq!(decoded.format, DecodedFormat::Float16);
+        assert_eq!(decoded.color_space, ColorSpace::Linear);
+        assert_eq!((decoded.width, decoded.height), (w, h));
+        assert_eq!(decoded.layers.len(), 1);
+        assert_eq!(decoded.layers[0].len(), (w * h * 8) as usize);
+    }
+
+    /// `max_dim`/`allow_bc` gate only the BC native path; a float DDS still
+    /// returns `Float16` when both are set so as to exclude a compressed upload.
+    #[test]
+    fn dds_float_max_dim_does_not_affect_float_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("hdr_f32_small_max.dds");
+
+        let (w, h) = (8u32, 8u32);
+        let pattern = [2.0f32, 0.5, 4.0, 1.0];
+        write_float32_dds(&path, w, h, &pattern);
+
+        let decoded = load_image_opts(
+            &path,
+            DecodeOptions {
+                allow_bc: true,
+                max_dim: 4,
+            },
+        )
+        .expect("load_image_opts ok");
+
+        assert_eq!(decoded.format, DecodedFormat::Float16);
+        assert_eq!(decoded.color_space, ColorSpace::Linear);
+        assert_eq!(decoded.layers.len(), 1);
+        assert_eq!(decoded.layers[0].len(), (w * h * 8) as usize);
+    }
 }
