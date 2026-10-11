@@ -172,7 +172,7 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **102 unit tests** across thirteen files (all pure-CPU except the GPU harness in `render.rs`):
+The suite is **103 unit tests** across thirteen files (all pure-CPU except the GPU harness in `render.rs`):
 
 - `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, and Copy/Paste carry their raw-key fallbacks.
 - `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
@@ -181,7 +181,7 @@ The suite is **102 unit tests** across thirteen files (all pure-CPU except the G
 - `app/batch.rs` — the conversion engine (Roadmap §5): rotate/flip/grayscale (documented luma)/negative/resize on known buffers, `OutputFormat::extension`, overwrite-skip, and an end-to-end PNG→JPEG via `tempfile`. Pure/CPU.
 - `app/edit.rs` — interactive edits (Roadmap §4): each rotation/flip on a known buffer, crop clamping, grayscale weights, negative, and undo/redo incl. bounded-capacity eviction. Pure.
 - `ui/batch_window.rs` — pure helpers behind the Convert window (`build_jobs`, `status_label`, `summarize`, file-list dedup, resize-with-no-dims no-op).
-- `render.rs` — tile `chunk_grid` math, the uniform struct's WGSL layout, and the **GPU harness** (`gpu_tests`): the render pipeline builds on a live adapter and a compute dispatch round-trips (both skip when no adapter).
+- `render.rs` — tile `chunk_grid` math, the uniform struct's WGSL layout, and the **GPU harness** (`gpu_tests`): the render pipeline builds on a live adapter, an image actually draws to an offscreen target (pixels read back), and a compute dispatch round-trips — all skip when no adapter.
 - `dir_walker.rs` — `is_supported_image` extension recognition (including the tga/pnm/ico/hdr additions) and `SUPPORTED_EXTENSIONS` is lowercase with no duplicates.
 - `app/clipboard.rs` — three `crop_rgba` tests (empty rect, single pixel, clamping) and a `current_rgba` test for following the displayed layer.
 - `app/saver.rs` — PNG and JPEG encoders write decodable files (JPEG drops alpha).
@@ -243,7 +243,7 @@ Many extra files in the repo are **ignored by git** (see `.gitignore`) and are A
 
 1. Read `CLAUDE.md` for behavioral rules.
 2. `cargo build --release` to confirm the tree compiles (expect zero warnings, no errors).
-3. `cargo test --release` to confirm the 102 unit tests pass.
+3. `cargo test --release` to confirm the 103 unit tests pass.
 4. For runtime work, `cargo run --release -- /some/folder/of/images` to launch.
 
 Note for agents running inside the ZCode desktop app: the sandbox rewrites `argv[0]`, which breaks rustup's proxy dispatch — invoke toolchain commands as `env cargo build --release` etc.
