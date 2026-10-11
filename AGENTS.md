@@ -79,19 +79,21 @@ src/
 ├── app.rs               # PhotonApp state struct + shared types (Priority, WorkerMessage, LoadResult, StatusOverlay, SaveStatus, MouseMode, SortMode, ZoomReset, AppSettings). Module root for the app/ submodule.
 ├── dir_walker.rs        # DirWalker + `SUPPORTED_EXTENSIONS` (single source of truth for recognised formats; reused by the Open dialog): fast non-recursive (max_depth=1, non-hidden) scan of supported image files.
 ├── image_loader.rs      # load_image() -> Result<DecodedImage, DecodeError>: DDS via image_dds, everything else via the image crate with Exif orientation applied at decode (upright pixels, dimensions swapped for 90/270); one RGBA8 buffer per layer.
-├── render.rs            # Image canvas render pass: WGSL pipeline, tile chunking, DrawImageCallback (see "GPU / render pipeline").
+├── render.rs            # Image canvas render pass: WGSL pipeline, tile chunking, DrawImageCallback (see "GPU / render pipeline") + the headless GPU test harness (`#[cfg(test)] mod gpu_tests`).
 ├── ui/
 │   ├── toolbar.rs       # Top panel body (open/copy/paste/save, mouse mode, sidebar toggle, prev/next).
 │   ├── info_bar.rs      # Bottom info bar (index, filename, dimensions, zoom, save status, layer/face selector).
 │   ├── sidebar.rs       # Left file-list sidebar (sort combo + virtualized rows).
 │   ├── settings_window.rs # Settings window body.
+│   ├── batch_window.rs  # Batch Convert window: file list, format/quality/folder, operation chain, non-blocking run + per-file status.
 │   └── overlay.rs       # Centre-screen status overlay (spinner / error / unsupported) + loading text.
 └── app/
     ├── loader.rs        # Worker thread (decode + GPU tile upload), LRU texture cache, speculative neighbor preload, directory load + watcher, sorting.
     ├── canvas.rs        # Image workspace: zoom/pan/selection drawing, checkerboard background, input handling per mouse mode.
     ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, fit_zoom, zoom_limits (adaptive, image-derived), zoom_to_fill, ZoomLock, image_pixel_at, html_hex, tile_offsets. fit/zoom + pixel readout + tile-repeat wired into canvas/info bar; ZoomLock awaits the Settings UI.
     ├── settings.rs      # AppSettings + SortMode + ZoomReset (split out of app.rs), re-exported from app.rs so paths are unchanged.
-    ├── batch.rs         # Batch conversion engine (Roadmap §5): Operation chain, OutputFormat, ConversionJob, convert_file/run_batch (`rayon` par_iter driver). Engine only — no UI yet (`#[allow(dead_code)]`).
+    ├── batch.rs         # Batch conversion engine (Roadmap §5): Operation chain, OutputFormat, ConversionJob, convert_file/run_batch (`rayon` par_iter driver). Driven by the Batch Convert window.
+    ├── edit.rs          # Interactive editing ops + bounded whole-image undo (Roadmap §4): rotate/flip/crop/grayscale/negative over RGBA8. Pure; not yet wired to the canvas.
     ├── clipboard.rs     # Copy (with optional crop from selection) and paste via arboard; current_rgba() source of truth for displayed bytes.
     ├── config.rs        # Settings persistence: config.ron via serde + RON, config dir via the directories crate.
     ├── saver.rs         # Save / Save Selection As: rfd save-as dialog, background encode, bottom-bar status feedback.
@@ -123,7 +125,7 @@ There are two background threads plus the main (render) thread, connected by `st
 
 Zoom/pan reset on image switch per the configured `ZoomReset` setting (`always` / `dimension_change` / `never`, default `dimension_change`) — see the tests in `app/loader.rs`. All settings persist to `config.ron` (serde + RON, `#[serde(default)]` so partial files load; directory from the `directories` crate, overridable with `PHOTON_CONFIG_DIR`). Settings are rewritten only when they actually change, so hand edits survive while nothing is touched.
 
-Viewer concurrency is raw `std::thread` + `mpsc`; the batch engine additionally uses `rayon`'s `par_iter`. The previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching), `rayon` (batch parallelism).
+Viewer concurrency is raw `std::thread` + `mpsc`; the batch engine additionally uses `rayon`'s `par_iter`. The previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching), `rayon` (batch parallelism), `pollster` (dev-only; drives the async wgpu calls in the GPU tests).
 
 ### GPU / render pipeline
 
@@ -168,21 +170,23 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **eighty unit tests** across eleven files, all pure-CPU:
+The suite is **102 unit tests** across thirteen files (all pure-CPU except the GPU harness in `render.rs`):
 
 - `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, and Copy/Paste carry their raw-key fallbacks.
 - `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; a no-Exif decode is byte-identical; and an Exif `orientation=6` PNG fixture decodes with swapped dimensions and a rotation permutation (Roadmap §3); plus `DecodeError::is_unsupported_format` classification (Roadmap §8).
 - `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, adaptive `zoom_limits`, zero-size guards, `clamp_to_limits`, `zoom_to_fill`, `ZoomLock`, plus the pixel-readout helpers (`image_pixel_at`, `html_hex`) and `tile_offsets`. Pure.
-- `app/batch.rs` — the conversion engine (Roadmap §5): rotate/flip/grayscale (documented luma)/negative/resize on known buffers, `OutputFormat::extension`, overwrite-skip, and an end-to-end PNG→JPEG via `tempfile`. Pure/CPU; no GPU.
-- `render.rs` — tile `chunk_grid` math (single tile, split grids, exact multiples) and the uniform struct's WGSL-compatible layout.
+- `app/batch.rs` — the conversion engine (Roadmap §5): rotate/flip/grayscale (documented luma)/negative/resize on known buffers, `OutputFormat::extension`, overwrite-skip, and an end-to-end PNG→JPEG via `tempfile`. Pure/CPU.
+- `app/edit.rs` — interactive edits (Roadmap §4): each rotation/flip on a known buffer, crop clamping, grayscale weights, negative, and undo/redo incl. bounded-capacity eviction. Pure.
+- `ui/batch_window.rs` — pure helpers behind the Convert window (`build_jobs`, `status_label`, `summarize`, file-list dedup, resize-with-no-dims no-op).
+- `render.rs` — tile `chunk_grid` math, the uniform struct's WGSL layout, and the **GPU harness** (`gpu_tests`): the render pipeline builds on a live adapter and a compute dispatch round-trips (both skip when no adapter).
 - `dir_walker.rs` — `is_supported_image` extension recognition (including the tga/pnm/ico/hdr additions) and `SUPPORTED_EXTENSIONS` is lowercase with no duplicates.
 - `app/clipboard.rs` — three `crop_rgba` tests (empty rect, single pixel, clamping) and a `current_rgba` test for following the displayed layer.
 - `app/saver.rs` — PNG and JPEG encoders write decodable files (JPEG drops alpha).
 - `app/loader.rs` — zoom-reset semantics (`ZoomReset::DimensionChange`/`Never`/`Always`), sharp-scaling sampler pick, and directory-refresh semantics (place preserved without reload / reload on mtime change / landing when the current file vanishes) on cached loads, exercised through `request_current`/`apply_dir_refresh` without a GPU.
 - `app/config.rs` — RON config: empty file → defaults, roundtrip, partial file fills defaults (incl. `fit_mode` → `ReduceOnly`), malformed file → defaults.
 
-There are no integration tests and no test harness for the actual GPU/worker upload path (which needs a live wgpu device). When adding behavior to pure, side-effect-free functions (path filtering, crop math, encoder wrappers, cache-hit state transitions, config parsing), add `#[cfg(test)]` unit tests next to the code, matching the existing pattern. Do not attempt to unit-test code that requires a live wgpu device or an egui context.
+There is a **headless GPU test harness** now (`src/render.rs`, `#[cfg(test)] mod gpu_tests`): `headless_device()` acquires a headless Vulkan/fallback adapter and returns `None` when unavailable, so GPU tests **skip cleanly** on a machine without one. Use that pattern for any new wgpu code (compute filters, render-pass changes) — do not unit-test code that needs an *egui* context, but wgpu code is fair game via the harness. When adding behavior to pure, side-effect-free functions (path filtering, crop math, encoder wrappers, cache-hit state transitions, config parsing), add `#[cfg(test)]` unit tests next to the code, matching the existing pattern.
 
 Run tests with `cargo test --release` (debug builds are slow to compile and run here).
 
@@ -237,7 +241,7 @@ Many extra files in the repo are **ignored by git** (see `.gitignore`) and are A
 
 1. Read `CLAUDE.md` for behavioral rules.
 2. `cargo build --release` to confirm the tree compiles (expect zero warnings, no errors).
-3. `cargo test --release` to confirm the 51 unit tests pass.
+3. `cargo test --release` to confirm the 102 unit tests pass.
 4. For runtime work, `cargo run --release -- /some/folder/of/images` to launch.
 
 Note for agents running inside the ZCode desktop app: the sandbox rewrites `argv[0]`, which breaks rustup's proxy dispatch — invoke toolchain commands as `env cargo build --release` etc.

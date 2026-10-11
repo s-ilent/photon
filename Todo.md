@@ -47,12 +47,17 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
       (`decode_layers_mipmaps_dds(.., 0..1)`), so a mip selector needs either
       per-mip decode on demand or the full chain at load.
 - [~] **Batch converter + operation chain** (`Roadmap.md` §5) — engine core
-      DONE (`app/batch.rs`, 2026-10-11): operations + formats + overwrite +
-      `rayon` `par_iter` parallel driver. REMAINING: the
-      "Convert…" dialog + live progress, per-format save options, convolution
-      filters, recipe import/export, and menu/registry wiring.
+      (`app/batch.rs`) and the **Convert… window** (`ui/batch_window.rs`) are
+      DONE (2026-10-11): file list, format/quality/folder, operation chain,
+      non-blocking `rayon` run, per-file status. REMAINING: recipe
+      import/export, per-format save options, convolution filters (compute
+      path, §5b), per-file overwrite dialog, determinate progress.
 - [ ] **Batch rename** (`Roadmap.md` §5) — mask tokens (file/image attrs,
       counters), search-and-replace, live preview, reorderable list.
+- [~] **Light editing core** (`Roadmap.md` §4) — pure ops + undo landed in
+      `app/edit.rs` (2026-10-11): rotate/flip/crop/grayscale/negative and a
+      bounded whole-image undo stack. REMAINING: canvas/menu wiring (apply an
+      op, undo/redo commands).
 - [ ] **Full browser** (`Roadmap.md` §7) — thumbnail grid + disk cache, views,
       sort, filters, folder tree/history, preview pane, file ops.
 - [ ] **Panorama creator** (`Roadmap.md` §6) — concatenation stitch only.
@@ -126,11 +131,11 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
 - [ ] **M3: native BCn upload** — BC1–BC7 DDS bytes straight to VRAM (no CPU
       decode); per-format pipeline variants (sRGB/blocky sample types), tile
       reuse across faces. Fallback to CPU decode stays for exotic formats.
-- [ ] **GPU test harness** (`Roadmap.md` §5b) — headless `tests/` integration
-      test that acquires a Vulkan adapter and runs a trivial compute pass,
-      skipping cleanly when no adapter exists. The substrate for testing wgpu
-      code (the compute filters, the render pass) which AGENTS.md currently
-      forbids unit-testing.
+- [x] **GPU test harness** (`Roadmap.md` §5b) — DONE 2026-10-11: headless
+      adapter + `#[cfg(test)] mod gpu_tests` in `render.rs`; tests the real
+      render pipeline builds and a compute pass round-trips, skipping cleanly
+      with no adapter (`pollster` dev-dep drives the async wgpu calls). AGENTS'
+      "don't unit-test wgpu" rule replaced with "use the harness".
 - [ ] **Compute-shader image filters (future)** (`Roadmap.md` §5b) — move
       convolution/effect filters to a `wgpu` compute pass (input texture →
       output texture), faster than CPU especially for convolution. **Keep the
@@ -192,6 +197,16 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-11 (batch 4: GPU harness, batch UI, editing core)
+- **GPU test harness** (`render.rs` `gpu_tests`): headless adapter; the real
+  render pipeline is asserted to build on the GPU and a compute pass round-trips
+  — both skip with no adapter. AGENTS' "don't unit-test wgpu" rule replaced.
+- **Batch Convert window** (`ui/batch_window.rs`): file list, format/quality/
+  folder, operation chain, non-blocking `rayon` run, per-file status.
+- **Editing core** (`app/edit.rs`): rotate/flip/crop/grayscale/negative +
+  bounded whole-image undo (canvas wiring pending).
+- 102 unit tests; build and clippy warning-free.
 
 ### 2026-10-11 (batch 3: viewing + batch engine)
 - **Concern split** — `AppSettings`/`SortMode`/`ZoomReset` moved to
