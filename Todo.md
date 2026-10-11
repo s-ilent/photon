@@ -21,19 +21,18 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
 2. **Command registry + params serialisation** (`Roadmap.md` §1) — the spine
    that makes key-rebinding, the CLI, and batch cheap; build it before those
    so they share one dispatch table.
-3. **Near-term viewing polish** (`Roadmap.md` §3) — fit modes, zoom set
-   (100 % / to-desktop / lock), Exif auto-rotate on load, status-bar pixel
-   readout, tile-repeat ("seamless texture") view. Small, high-visibility.
-4. **Batch conversion + operation chain**, then **batch rename**
-   (`Roadmap.md` §5) — `rayon` `par_iter`, a real "Convert…" dialog.
-5. **Light editing core** (`Roadmap.md` §4) — rotate / flip / crop,
-   grayscale / negative, edit undo.
-6. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC with the
+3. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC with the
    shader pass.
-7. **Full browser** (`Roadmap.md` §7) with the persistent thumbnail cache.
-8. **Texture inspection sidebar** — DEFERRED: the user is designing this.
+4. **Batch rename + the remaining batch items** (`Roadmap.md` §5) — recipe
+   import/export and the interactive overwrite dialog (the chain, save options
+   and progress landed 2026-10-12).
+5. **Full browser** (`Roadmap.md` §7) with the persistent thumbnail cache.
+6. **Texture inspection sidebar** — DEFERRED: the user is designing this.
    Implement only against their design when it's ready.
-9. **Property map mode** — when a spec exists.
+7. **Property map mode** — when a spec exists.
+
+Done recently (2026-10-12): near-term viewing polish (§3) and the light editing
+core (§4) are complete; see the Done log. Next up is the shader M3 arc.
 
 ---
 
@@ -49,15 +48,23 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
 - [~] **Batch converter + operation chain** (`Roadmap.md` §5) — engine core
       (`app/batch.rs`) and the **Convert… window** (`ui/batch_window.rs`) are
       DONE (2026-10-11): file list, format/quality/folder, operation chain,
-      non-blocking `rayon` run, per-file status. REMAINING: recipe
-      import/export, per-format save options, convolution filters (compute
-      path, §5b), per-file overwrite dialog, determinate progress.
+      non-blocking `rayon` run, per-file status. The chain, save options and
+      progress advanced 2026-10-12: the seven convolution filters
+      (blur/soften/sharpen/Gaussian3/Gaussian5/emboss/edge, Roadmap Appendix A
+      kernels) as the retained CPU path, `SaveOptions` (JPEG quality + PNG
+      compression; WebP quality and TIFF compression are unavailable in
+      `image` 0.25), and a determinate progress bar via
+      `run_batch_with_progress`. REMAINING: recipe import/export, the
+      interactive per-file overwrite dialog (`OverwritePolicy::Ask` still
+      behaves as skip), and the compute-shader path for filters (§5b).
 - [ ] **Batch rename** (`Roadmap.md` §5) — mask tokens (file/image attrs,
       counters), search-and-replace, live preview, reorderable list.
-- [~] **Light editing core** (`Roadmap.md` §4) — pure ops + undo landed in
-      `app/edit.rs` (2026-10-11): rotate/flip/crop/grayscale/negative and a
-      bounded whole-image undo stack. REMAINING: canvas/menu wiring (apply an
-      op, undo/redo commands).
+- [x] **Light editing core** (`Roadmap.md` §4) — DONE 2026-10-12. Pure ops +
+      bounded undo in `app/edit.rs` (2026-10-11) plus the canvas/menu wiring:
+      `apply_edit`/`undo_edit`/`redo_edit` re-upload the result on the main
+      thread (kept out of the LRU cache, so an edit is transient and copy/save
+      always match the screen), the eight edit ops + Undo/Redo are registry
+      commands, and the Edit menu drives them.
 - [ ] **Full browser** (`Roadmap.md` §7) — thumbnail grid + disk cache, views,
       sort, filters, folder tree/history, preview pane, file ops.
 - [ ] **Panorama creator** (`Roadmap.md` §6) — concatenation stitch only.
@@ -85,12 +92,12 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
       at decode in `image_loader.rs` via the `image` crate's
       `into_decoder`/`orientation`/`apply_orientation` (no new dep); dimensions
       swap for 90/270. Landscape/portrait phone photos now load upright.
-- [ ] **Fit modes + zoom set** (`Roadmap.md` §3) — don't-fit / reduce-only /
-      always-fit, fit-window per axis + centre, zoom 100 % / to-desktop / lock.
-      Fit + zoom limits + the fit-mode Setting + `Fit`/`100%` toolbar buttons
-      are WIRED (2026-10-11). Remaining: fit-window-per-axis + centre,
-      zoom-to-desktop, and wiring `ZoomLock` (last `#[allow(dead_code)]` in
-      `app/view.rs`).
+- [x] **Fit modes + zoom set** (`Roadmap.md` §3) — DONE 2026-10-12. Fit +
+      zoom limits + the fit-mode Setting + `Fit`/`100%` buttons (2026-10-11),
+      then fit-window-per-axis (`FitWindow` + Settings combo + View menu),
+      centre-window and zoom-to-desktop actions, and `ZoomLock` (persisted
+      `lock_zoom`, Settings checkbox + View menu toggle) — the last
+      `#[allow(dead_code)]` in `app/view.rs` is gone.
 - [x] **Status-bar pixel readout** (`Roadmap.md` §3) — DONE 2026-10-11:
       hovered pixel (RGB/alpha/hex) in the info bar, click-to-copy; sampled from
       `active_rgba` (blank on cache-hit loads). Tile-repeat ("seamless texture")
@@ -197,6 +204,33 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-12 (editing + viewing polish + batch polish)
+- **Interactive editing wired** (Roadmap §4): `apply_edit`/`undo_edit`/`redo_edit`
+  apply rotate/flip/crop/grayscale/negative to the displayed image and re-upload
+  it built on the main thread — deliberately *not* through the loader worker and
+  kept out of the LRU cache, so the cache holds only unmodified disk images and a
+  cache-hit copy/save always matches the screen. Undo history cleared on target
+  change / paste. Eight edit commands + Undo (Cmd+Z) / Redo (Cmd+Shift+Z) added to
+  the registry. The temp `#[allow(dead_code)]` on `mod edit` is gone.
+- **Fit window / centre / zoom-to-desktop + `ZoomLock`** (Roadmap §3): `FitWindow`
+  (don't / enlarge-if-smaller / always) with monitor clamping, `centered_window_pos`,
+  `zoom_to_desktop`, a persisted `fit_window` setting + Settings combo, and View-menu
+  actions. `ZoomLock` wired: persisted `lock_zoom` + Settings checkbox + View toggle,
+  overriding the navigation reset policy. The `#[allow(dead_code)]` on `mod view` is gone.
+- **Registry-driven menu bar**: File/Edit/View menus built from `Command::all()` +
+  `menu_group()` + `command_enabled()`, so the registry's name surface is live and a
+  new command joins a menu by declaring its group. Removes the `impl Command` allow.
+- **Batch polish** (Roadmap §5/§5b): the seven convolution filters as the retained CPU
+  path (Appendix A kernels), `SaveOptions` (JPEG quality + PNG compression) threaded
+  through encode/convert_file/run_batch, and a determinate progress bar
+  (`run_batch_with_progress` + `BatchMessage::Progress`).
+- Tests: 103 → 128.
+- Deviation from the plan: edits are re-uploaded on the main thread rather than through
+  a new `WorkerMessage::Replace`, to avoid caching an edited texture under the original
+  path (which would desync copy/save from the display).
+- Not done (still open): the interactive `OverwritePolicy::Ask` dialog; WebP/TIFF save
+  options (unavailable in `image` 0.25).
 
 ### 2026-10-11 (render fixes)
 - Canvas drew nothing: `callback_resources` (TypeId-keyed) had `Arc<ImageRendererState>`

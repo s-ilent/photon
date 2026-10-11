@@ -72,28 +72,28 @@ All source lives under `src/`. The binary entry point is `src/main.rs`.
 
 ```
 src/
-├── main.rs              # Entry point. `fn main()` bootstrap + `impl eframe::App` (delegates panel bodies to ui/ and dispatches commands).
+├── main.rs              # Entry point. `fn main()` bootstrap + `impl eframe::App` (menu bar + panels, delegates bodies to ui/ and dispatches commands).
 ├── input.rs             # Shortcut scanner: `take_commands(ctx)` reads the command registry's binding table off egui input (incl. the Ctrl+C/V command-event gotcha).
-├── commands.rs          # Command registry (Roadmap §1): `Command` enum, `default_bindings()`, `PhotonApp::run_command()` — the single key→action table.
+├── commands.rs          # Command registry (Roadmap §1): `Command` enum, `MenuGroup`, `default_bindings()`, `PhotonApp::run_command()`/`command_enabled()` — the single key→action table; the File/Edit/View menu bar iterates `Command::all()` by group.
 ├── ui.rs                # Module root for the ui/ submodule.
 ├── app.rs               # PhotonApp state struct + shared types (Priority, WorkerMessage, LoadResult, StatusOverlay, SaveStatus, MouseMode, SortMode, ZoomReset, AppSettings). Module root for the app/ submodule.
 ├── dir_walker.rs        # DirWalker + `SUPPORTED_EXTENSIONS` (single source of truth for recognised formats; reused by the Open dialog): fast non-recursive (max_depth=1, non-hidden) scan of supported image files.
 ├── image_loader.rs      # load_image() -> Result<DecodedImage, DecodeError>: DDS via image_dds, everything else via the image crate with Exif orientation applied at decode (upright pixels, dimensions swapped for 90/270); one RGBA8 buffer per layer.
 ├── render.rs            # Image canvas render pass: WGSL pipeline, tile chunking, DrawImageCallback (see "GPU / render pipeline") + the headless GPU test harness (`#[cfg(test)] mod gpu_tests`).
 ├── ui/
-│   ├── toolbar.rs       # Top panel body (open/copy/paste/save, mouse mode, sidebar toggle, prev/next).
+│   ├── toolbar.rs       # Top menu bar (File/Edit/View, registry-driven) + toolbar panel body (open/copy/paste/save, mouse mode, sidebar toggle, prev/next, fit/zoom).
 │   ├── info_bar.rs      # Bottom info bar (index, filename, dimensions, zoom, save status, layer/face selector).
 │   ├── sidebar.rs       # Left file-list sidebar (sort combo + virtualized rows).
 │   ├── settings_window.rs # Settings window body.
-│   ├── batch_window.rs  # Batch Convert window: file list, format/quality/folder, operation chain, non-blocking run + per-file status.
+│   ├── batch_window.rs  # Batch Convert window: file list, format/quality/folder, operation chain (incl. convolution filters), non-blocking run, determinate progress + per-file status.
 │   └── overlay.rs       # Centre-screen status overlay (spinner / error / unsupported) + loading text.
 └── app/
     ├── loader.rs        # Worker thread (decode + GPU tile upload), LRU texture cache, speculative neighbor preload, directory load + watcher, sorting.
     ├── canvas.rs        # Image workspace: zoom/pan/selection drawing, checkerboard background, input handling per mouse mode.
-    ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, fit_zoom, zoom_limits (adaptive, image-derived), zoom_to_fill, ZoomLock, image_pixel_at, html_hex, tile_offsets. fit/zoom + pixel readout + tile-repeat wired into canvas/info bar; ZoomLock awaits the Settings UI.
+    ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, FitWindow, fit_zoom, fit_window_size, zoom_limits (adaptive, image-derived), zoom_to_fill, zoom_to_desktop, centered_window_pos, ZoomLock, image_pixel_at, html_hex, tile_offsets. All wired into canvas/info bar/Settings/View menu.
     ├── settings.rs      # AppSettings + SortMode + ZoomReset (split out of app.rs), re-exported from app.rs so paths are unchanged.
-    ├── batch.rs         # Batch conversion engine (Roadmap §5): Operation chain, OutputFormat, ConversionJob, convert_file/run_batch (`rayon` par_iter driver). Driven by the Batch Convert window.
-    ├── edit.rs          # Interactive editing ops + bounded whole-image undo (Roadmap §4): rotate/flip/crop/grayscale/negative over RGBA8. Pure; not yet wired to the canvas.
+    ├── batch.rs         # Batch conversion engine (Roadmap §5): Operation chain (incl. FilterKind convolution), SaveOptions, OutputFormat, ConversionJob, convert_file/run_batch(_with_progress) (`rayon` par_iter driver). Driven by the Batch Convert window.
+    ├── edit.rs          # Interactive editing ops + bounded whole-image undo (Roadmap §4): EditOp {rotate/flip/crop/grayscale/negative} over RGBA8 + UndoStack. Pure; applied and re-uploaded from canvas.rs.
     ├── clipboard.rs     # Copy (with optional crop from selection) and paste via arboard; current_rgba() source of truth for displayed bytes.
     ├── config.rs        # Settings persistence: config.ron via serde + RON, config dir via the directories crate.
     ├── saver.rs         # Save / Save Selection As: rfd save-as dialog, background encode, bottom-bar status feedback.
@@ -110,7 +110,7 @@ src/
 - `SaveStatus` — transient bottom-bar message for save success/failure (set by `app/saver.rs`, polled via `check_save_status`).
 - `MouseMode::{Browse, Navigate, Select}` — cycles with Tab/Backslash. Changes how mouse input is interpreted (see canvas.rs).
 - `SortMode` — six modes (alphabetical, alphabetical desc, date modified newest/oldest, file size largest/smallest). Applied to `self.images` in `sort_images`.
-- `AppSettings` (in `app/settings.rs`) — user-facing settings exposed in the Settings window (theme, font size, scale-to-fit, sharp scaling, checkerboard background, tile-repeat, zoom-reset, fit mode, sort mode). Re-exported from `app.rs`.
+- `AppSettings` (in `app/settings.rs`) — user-facing settings exposed in the Settings window (theme, font size, scale-to-fit, sharp scaling, checkerboard background, tile-repeat, zoom-reset, fit mode, fit window, lock zoom, sort mode). Re-exported from `app.rs`.
 
 ### Runtime architecture (concurrency model)
 
@@ -165,6 +165,9 @@ Defined in `src/main.rs` via `egui::KeyboardShortcut` and `Modifiers::COMMAND` (
 | Previous image | `Backspace` / `Left Arrow` |
 | Cycle mouse mode | `Tab` / `Backslash` |
 | Toggle fullscreen | `F11` |
+| Undo / redo edit | `Cmd/Ctrl + Z` / `Cmd/Ctrl + Shift + Z` |
+
+The File/Edit/View menu bar (in `ui/toolbar.rs`) is driven by the registry: every `Command` is listed under its `MenuGroup` with its `command_enabled()` state, so it is the discoverable home for the edit ops (rotate/flip/crop/grayscale/negative), Convert…, and the runtime-only View actions (Lock Zoom, Fit Window to Image, Centre Window, Zoom to Desktop) that are not registry commands.
 
 GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/`Paste`/`Cut` at the input layer — the key events never exist on winit platforms. Copy/paste are therefore dispatched from those command events (plus key-shortcut fallbacks) in `take_shortcut_actions` (`src/main.rs`), which has synthetic-input tests. If a TextEdit is ever added, it will not see Ctrl+C/V — handle it there deliberately.
 
@@ -172,15 +175,15 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **103 unit tests** across thirteen files (all pure-CPU except the GPU harness in `render.rs`):
+The suite is **128 unit tests** across thirteen files (all pure-CPU except the GPU harness in `render.rs`):
 
-- `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, and Copy/Paste carry their raw-key fallbacks.
+- `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, Copy/Paste carry their raw-key fallbacks, and `command_enabled()` gating (undo/redo/crop/edit/Save disabled without history/selection/image).
 - `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; a no-Exif decode is byte-identical; and an Exif `orientation=6` PNG fixture decodes with swapped dimensions and a rotation permutation (Roadmap §3); plus `DecodeError::is_unsupported_format` classification (Roadmap §8).
-- `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, adaptive `zoom_limits`, zero-size guards, `clamp_to_limits`, `zoom_to_fill`, `ZoomLock`, plus the pixel-readout helpers (`image_pixel_at`, `html_hex`) and `tile_offsets`. Pure.
-- `app/batch.rs` — the conversion engine (Roadmap §5): rotate/flip/grayscale (documented luma)/negative/resize on known buffers, `OutputFormat::extension`, overwrite-skip, and an end-to-end PNG→JPEG via `tempfile`. Pure/CPU.
+- `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, `FitWindow` (don't / enlarge-if-smaller / always) with monitor clamping, `centered_window_pos`, `zoom_to_desktop`, adaptive `zoom_limits`, zero-size guards, `clamp_to_limits`, `zoom_to_fill`, `ZoomLock`, plus the pixel-readout helpers (`image_pixel_at`, `html_hex`) and `tile_offsets`. Pure.
+- `app/batch.rs` — the conversion engine (Roadmap §5): rotate/flip/grayscale (documented luma)/negative/resize on known buffers, the convolution `convolve` + `FilterKind`, `SaveOptions`, `OutputFormat::extension`, overwrite-skip, `run_batch_with_progress` counting, and an end-to-end PNG→JPEG via `tempfile`. Pure/CPU.
 - `app/edit.rs` — interactive edits (Roadmap §4): each rotation/flip on a known buffer, crop clamping, grayscale weights, negative, and undo/redo incl. bounded-capacity eviction. Pure.
-- `ui/batch_window.rs` — pure helpers behind the Convert window (`build_jobs`, `status_label`, `summarize`, file-list dedup, resize-with-no-dims no-op).
+- `ui/batch_window.rs` — pure helpers behind the Convert window (`build_jobs`, `status_label`, `summarize`, file-list dedup, resize-with-no-dims no-op, filter-choice mapping).
 - `render.rs` — tile `chunk_grid` math, the uniform struct's WGSL layout, and the **GPU harness** (`gpu_tests`): the render pipeline builds on a live adapter, an image actually draws to an offscreen target (pixels read back), and a compute dispatch round-trips — all skip when no adapter.
 - `dir_walker.rs` — `is_supported_image` extension recognition (including the tga/pnm/ico/hdr additions) and `SUPPORTED_EXTENSIONS` is lowercase with no duplicates.
 - `app/clipboard.rs` — three `crop_rgba` tests (empty rect, single pixel, clamping) and a `current_rgba` test for following the displayed layer.
@@ -243,7 +246,7 @@ Many extra files in the repo are **ignored by git** (see `.gitignore`) and are A
 
 1. Read `CLAUDE.md` for behavioral rules.
 2. `cargo build --release` to confirm the tree compiles (expect zero warnings, no errors).
-3. `cargo test --release` to confirm the 103 unit tests pass.
+3. `cargo test --release` to confirm the 128 unit tests pass.
 4. For runtime work, `cargo run --release -- /some/folder/of/images` to launch.
 
 Note for agents running inside the ZCode desktop app: the sandbox rewrites `argv[0]`, which breaks rustup's proxy dispatch — invoke toolchain commands as `env cargo build --release` etc.

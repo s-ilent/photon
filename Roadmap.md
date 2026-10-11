@@ -89,16 +89,17 @@ Already in Photon: zoom-at-cursor, pan, next/prev, fullscreen, mouse-mode
 cycling, DDS layer/face selection, shader sharp scaling, chunked oversized
 images.
 
-- [ ] **Fit modes**: don't-fit / reduce-only-if-larger / always-fit, plus a
-      separate *fit bigger image to window* toggle; **fit window per axis**
-      (don't / enlarge-if-smaller / always-resize) and *centre window*.
-- [ ] **Exif auto-rotate on load** — orient *before* fit/scrollbar math so the
+- [x] **Fit modes**: don't-fit / reduce-only-if-larger / always-fit; **fit
+      window per axis** (don't / enlarge-if-smaller / always-resize) and
+      *centre window*. (A separate free "fit bigger image to window" toggle
+      remains open.)
+- [x] **Exif auto-rotate on load** — orient *before* fit/scrollbar math so the
       window sizes correctly; also in thumbnails.
-- [ ] **Zoom set**: 100 %, **zoom-to-desktop**, **lock zoom** across navigation.
-- [ ] **Tile-repeat ("seamless texture") view** — repeat the texture in a grid.
+- [x] **Zoom set**: 100 %, **zoom-to-desktop**, **lock zoom** across navigation.
+- [x] **Tile-repeat ("seamless texture") view** — repeat the texture in a grid.
       *Distinct from Photon's chunked viewing* (which splits one oversized image
       at the GPU limit); this multiplies a small one. A tile-grid uniform.
-- [ ] **Status-bar pixel readout** — RGB / alpha / HTML hex (click to copy).
+- [x] **Status-bar pixel readout** — RGB / alpha / HTML hex (click to copy).
 - [ ] **Alpha mask view** + transparency backdrop modes (checkerboard / solid /
       pattern).
 - [ ] **Display-while-loading** low-res preview, with no resize on arrival.
@@ -109,11 +110,12 @@ images.
 The registry (§1) and frame model (§2) come first. This is the *entire*
 interactive edit set — nothing else gets a menu item.
 
-- [ ] **Rotate**: left / right / 180, plus **free rotate** with a background
-      colour for the exposed corners.
-- [ ] **Flip** horizontal / vertical.
-- [ ] **Crop** — undoable, transparency-aware, multi-frame.
-- [ ] **Grayscale** (integer luma) + **negative**.
+- [x] **Rotate**: left / right / 180. (Free rotate with a background colour for
+      the exposed corners is still open.)
+- [x] **Flip** horizontal / vertical.
+- [x] **Crop** — undoable. (Transparency-aware / multi-frame refinements remain
+      with the frame model, §2.)
+- [x] **Grayscale** (integer luma) + **negative**.
 
 **Note on the asymmetry.** Resize and the convolution filters are in the
 registry (§1) because the batch chain needs them (§5), but they are *not*
@@ -127,14 +129,19 @@ depth internally. **Filters are compute-shader work** — see §5b.
 - [ ] **Batch conversion**: output folder (auto-created), target format + its
       *save options*, per-file **status** rows, overwrite policy
       *ask / yes-to-all / skip*, continue-on-error, live progress, UI pumped
-      between files. `rayon` `par_iter` underneath.
+      between files. `rayon` `par_iter` underneath. *(Done: folder/format/
+      status/save-options (JPEG quality + PNG compression)/continue-on-error/
+      live progress. Open: the interactive ask/yes-to-all dialog — `Ask` still
+      behaves as skip.)*
 - [ ] **Batch operation chain** — the operations the chain can apply before
       saving:
-      - format conversion + per-format save options (the core);
-      - **resize** (pixels / percent) with the resample-filter set (Appendix A);
-      - **rotate / flip / grayscale / negative**;
-      - **convolution filters** — blur, soften, sharpen, Gaussian 3×3/5×5,
-        emboss, edge (Appendix A). **Compute shader** (§5b), not a CPU loop.
+      - [x] format conversion + per-format save options (the core; WebP quality
+            and TIFF compression are unavailable in `image` 0.25);
+      - [x] **resize** (pixels / percent) with the resample-filter set (Appendix A);
+      - [x] **rotate / flip / grayscale / negative**;
+      - [x] **convolution filters** — blur, soften, sharpen, Gaussian 3×3/5×5,
+            emboss, edge (Appendix A). *(CPU path landed 2026-10-12; the compute
+            shader of §5b remains the target accelerator.)*
 - [ ] **Recipe import/export** as CLI text — falls out of §1/§10.
 - [ ] **Batch rename**: mask with insertable tokens — file name/ext/size/date/
       time, image width/height/bpp, and `<Counter.start,step,digits>`
