@@ -680,4 +680,205 @@ mod tests {
         assert!(!is_srgb_dxgi(BC5_UNorm));
         assert!(!is_srgb_dxgi(R8G8B8A8_UNorm));
     }
+
+    /// Write an in-memory DDS to `path`, overwriting its `data` with `data`.
+    fn write_dds_with_data(path: &std::path::Path, mut dds: image_dds::ddsfile::Dds, data: Vec<u8>) {
+        dds.data = data;
+        let mut f = std::fs::File::create(path).expect("create file");
+        dds.write(&mut f).expect("write dds");
+    }
+
+    /// Build a DXGI DDS (single array layer, mip 0 only) for a BC format.
+    fn new_dxgi_dds(
+        w: u32,
+        h: u32,
+        format: image_dds::ddsfile::DxgiFormat,
+    ) -> image_dds::ddsfile::Dds {
+        image_dds::ddsfile::Dds::new_dxgi(image_dds::ddsfile::NewDxgiParams {
+            height: h,
+            width: w,
+            depth: None,
+            format,
+            mipmap_levels: Some(1),
+            array_layers: Some(1),
+            caps2: None,
+            is_cubemap: false,
+            resource_dimension: image_dds::ddsfile::D3D10ResourceDimension::Texture2D,
+            alpha_mode: image_dds::ddsfile::AlphaMode::Unknown,
+        })
+        .expect("build dds")
+    }
+
+    /// A BC1 DDS loaded with `allow_bc` keeps its raw block bytes compressed
+    /// instead of decoding to RGBA8. 8x8 BC1 = 2x2 blocks of 8 bytes = 32 bytes.
+    #[test]
+    fn dds_bc1_allowed_keeps_compressed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bc1.dds");
+
+        let (w, h) = (8u32, 8u32);
+        let blocks: Vec<u8> = (0..32u8).collect();
+        let dds = new_dxgi_dds(w, h, image_dds::ddsfile::DxgiFormat::BC1_UNorm);
+        write_dds_with_data(&path, dds, blocks.clone());
+
+        let decoded = load_image_opts(
+            &path,
+            DecodeOptions {
+                allow_bc: true,
+                max_dim: 16384,
+            },
+        )
+        .expect("load_image_opts ok");
+
+        assert_eq!(decoded.format, DecodedFormat::Bc(BcKind::Bc1));
+        assert_eq!(
+            decoded.color_space,
+            ColorSpace::Linear,
+            "BC1_UNorm is non-sRGB"
+        );
+        assert_eq!((decoded.width, decoded.height), (w, h));
+        assert_eq!(decoded.layers.len(), 1);
+        assert_eq!(decoded.layers[0].len(), 32);
+        assert_eq!(decoded.layers[0], blocks, "raw block bytes must survive");
+    }
+
+    /// The sRGB variant of BC1 keeps the same BC1 layout but reports sRGB bytes.
+    #[test]
+    fn dds_bc1_srgb_reads_as_srgb() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bc1_srgb.dds");
+
+        let (w, h) = (8u32, 8u32);
+        let blocks: Vec<u8> = (0..32u8).collect();
+        let dds = new_dxgi_dds(w, h, image_dds::ddsfile::DxgiFormat::BC1_UNorm_sRGB);
+        write_dds_with_data(&path, dds, blocks.clone());
+
+        let decoded = load_image_opts(
+            &path,
+            DecodeOptions {
+                allow_bc: true,
+                max_dim: 16384,
+            },
+        )
+        .expect("load_image_opts ok");
+
+        assert_eq!(decoded.format, DecodedFormat::Bc(BcKind::Bc1));
+        assert_eq!(decoded.color_space, ColorSpace::Srgb);
+        assert_eq!(decoded.layers, vec![blocks]);
+    }
+
+    /// Without `allow_bc` the same BC1 DDS falls back to a CPU RGBA8 decode.
+    #[test]
+    fn dds_bc_disallowed_decodes_to_rgba8() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bc1_cpu.dds");
+
+        let (w, h) = (8u32, 8u32);
+        let blocks: Vec<u8> = (0..32u8).collect();
+        let dds = new_dxgi_dds(w, h, image_dds::ddsfile::DxgiFormat::BC1_UNorm);
+        write_dds_with_data(&path, dds, blocks);
+
+        let decoded = load_image_opts(&path, DecodeOptions::cpu()).expect("load_image_opts ok");
+
+        assert!(matches!(decoded.format, DecodedFormat::Rgba8));
+        assert!(
+            !matches!(decoded.format, DecodedFormat::Bc(_)),
+            "CPU path must not return compressed bytes"
+        );
+        assert_eq!(decoded.layers.len(), 1);
+        assert_eq!(decoded.layers[0].len() as u32, w * h * 4);
+    }
+
+    /// A BC image larger than `max_dim` cannot be kept compressed (chunking
+    /// can't slice a block stream), so it falls back to the CPU decode.
+    #[test]
+    fn dds_bc_over_max_dim_falls_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bc1_big.dds");
+
+        let (w, h) = (8u32, 8u32);
+        let blocks: Vec<u8> = (0..32u8).collect();
+        let dds = new_dxgi_dds(w, h, image_dds::ddsfile::DxgiFormat::BC1_UNorm);
+        write_dds_with_data(&path, dds, blocks);
+
+        let decoded = load_image_opts(
+            &path,
+            DecodeOptions {
+                allow_bc: true,
+                max_dim: 4,
+            },
+        )
+        .expect("load_image_opts ok");
+
+        assert!(matches!(decoded.format, DecodedFormat::Rgba8));
+        assert_eq!(decoded.layers.len(), 1);
+        assert_eq!(decoded.layers[0].len() as u32, w * h * 4);
+    }
+
+    /// A legacy DXT1 FourCC DDS maps through `get_dxgi_format` to
+    /// `BC1_UNorm_sRGB` (ddsfile's `try_from_pixel_format`), so it comes back as
+    /// a BC1 layout tagged sRGB. 4x4 = a single 8-byte block.
+    #[test]
+    fn dds_legacy_dxt1_maps_to_bc1() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dxt1.dds");
+
+        let (w, h) = (4u32, 4u32);
+        let blocks: Vec<u8> = (0..8u8).collect();
+        let dds = image_dds::ddsfile::Dds::new_d3d(image_dds::ddsfile::NewD3dParams {
+            height: h,
+            width: w,
+            depth: None,
+            format: image_dds::ddsfile::D3DFormat::DXT1,
+            mipmap_levels: Some(1),
+            caps2: None,
+        })
+        .expect("build dds");
+        write_dds_with_data(&path, dds, blocks.clone());
+
+        let decoded = load_image_opts(
+            &path,
+            DecodeOptions {
+                allow_bc: true,
+                max_dim: 16384,
+            },
+        )
+        .expect("load_image_opts ok");
+
+        assert_eq!(decoded.format, DecodedFormat::Bc(BcKind::Bc1));
+        assert_eq!(
+            decoded.color_space,
+            ColorSpace::Srgb,
+            "ddsfile maps the DXT1 FourCC to BC1_UNorm_sRGB"
+        );
+        assert_eq!(decoded.layers, vec![blocks]);
+    }
+
+    /// BC5_UNorm (ATI2) is a two-channel 16-byte block layout; it maps to
+    /// `BcKind::Bc5Unorm` with linear bytes. 8x8 = 2x2 blocks of 16 = 64 bytes.
+    #[test]
+    fn dds_bc5_unorm_maps_to_bc5_and_keeps_blocks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bc5.dds");
+
+        let (w, h) = (8u32, 8u32);
+        let blocks: Vec<u8> = (0..64u8).collect();
+        let dds = new_dxgi_dds(w, h, image_dds::ddsfile::DxgiFormat::BC5_UNorm);
+        write_dds_with_data(&path, dds, blocks.clone());
+
+        let decoded = load_image_opts(
+            &path,
+            DecodeOptions {
+                allow_bc: true,
+                max_dim: 16384,
+            },
+        )
+        .expect("load_image_opts ok");
+
+        assert_eq!(decoded.format, DecodedFormat::Bc(BcKind::Bc5Unorm));
+        assert_eq!(decoded.color_space, ColorSpace::Linear);
+        assert_eq!(decoded.layers.len(), 1);
+        assert_eq!(decoded.layers[0].len(), 16 * 2 * 2);
+        assert_eq!(decoded.layers[0], blocks);
+    }
 }
