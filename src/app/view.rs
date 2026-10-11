@@ -99,6 +99,103 @@ pub(crate) fn zoom_percent_label(z: f32) -> String {
     format!("{}%", (z * 100.0).round() as i32)
 }
 
+/// Map a screen position to the image pixel under it, for the status-bar
+/// readout. `image_screen_rect` is the drawn (on-screen) rect of the whole
+/// image, `zoom` the screen-pixels-per-image-pixel scalar.
+///
+/// Returns `None` when `screen` is outside the drawn rect, when the rect or
+/// zoom is degenerate, or when the computed index falls outside the image
+/// bounds (the rect's max edge maps to `width`/`height`, which are not pixels).
+pub(crate) fn image_pixel_at(
+    screen: egui::Pos2,
+    image_screen_rect: egui::Rect,
+    zoom: f32,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32)> {
+    if zoom <= 0.0 || width == 0 || height == 0 {
+        return None;
+    }
+    if !image_screen_rect.contains(screen) {
+        return None;
+    }
+    let rel = screen - image_screen_rect.min;
+    let fx = rel.x / zoom;
+    let fy = rel.y / zoom;
+    if !fx.is_finite() || !fy.is_finite() || fx < 0.0 || fy < 0.0 {
+        return None;
+    }
+    // Non-negative float -> int casts truncate (== floor here).
+    let x = fx as u32;
+    let y = fy as u32;
+    if x >= width || y >= height {
+        return None;
+    }
+    Some((x, y))
+}
+
+/// `#RRGGBB` (uppercase) for an RGBA8 sample; alpha is deliberately omitted as
+/// HTML hex has no alpha channel in this form.
+pub(crate) fn html_hex(rgba: [u8; 4]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])
+}
+
+/// Extra grid offsets needed so copies of `image_rect` tile across `viewport`.
+///
+/// The first entry is always [`egui::Vec2::ZERO`] (the centre tile the app
+/// already draws); the rest are integer multiples of the image size that push
+/// neighbouring copies into view. Results are ordered nearest-first and capped
+/// at `max_tiles` total entries, so a tiny image zoomed far out cannot
+/// enumerate an unbounded grid.
+pub(crate) fn tile_offsets(
+    viewport: egui::Rect,
+    image_rect: egui::Rect,
+    max_tiles: usize,
+) -> Vec<egui::Vec2> {
+    if max_tiles == 0 {
+        return Vec::new();
+    }
+    let mut offsets = Vec::with_capacity(max_tiles.min(64));
+    offsets.push(egui::Vec2::ZERO);
+    let w = image_rect.width();
+    let h = image_rect.height();
+    if max_tiles == 1 || w <= 0.0 || h <= 0.0 || !viewport.is_positive() {
+        return offsets;
+    }
+
+    // Index window on the tile grid: the copies whose rect intersects the
+    // viewport. A copy at (i, j) spans image_rect translated by (i*w, j*h), so
+    // it intersects horizontally when
+    //   i >= (viewport.min.x - image_rect.max.x) / w
+    //   i <= (viewport.max.x - image_rect.min.x) / w
+    // Clamped (in each direction) to `max_tiles`, since more copies than that
+    // could never be drawn anyway.
+    let cap = max_tiles as i64;
+    let k_lo = (((viewport.min.x - image_rect.max.x) / w).ceil() as i64).max(-cap);
+    let k_hi = (((viewport.max.x - image_rect.min.x) / w).floor() as i64).min(cap);
+    let j_lo = (((viewport.min.y - image_rect.max.y) / h).ceil() as i64).max(-cap);
+    let j_hi = (((viewport.max.y - image_rect.min.y) / h).floor() as i64).min(cap);
+
+    let mut candidates: Vec<(i64, i64)> = Vec::new();
+    for i in k_lo..=k_hi {
+        for j in j_lo..=j_hi {
+            if i == 0 && j == 0 {
+                continue;
+            }
+            candidates.push((i, j));
+        }
+    }
+    candidates.sort_by_key(|&(i, j)| i * i + j * j);
+
+    for (i, j) in candidates {
+        if offsets.len() >= max_tiles {
+            break;
+        }
+        offsets.push(egui::vec2(i as f32 * w, j as f32 * h));
+    }
+    offsets
+}
+
 /// "Lock zoom across navigation" primitive.
 ///
 /// While locked, [`ZoomLock::apply`] returns the captured zoom instead of the
@@ -302,5 +399,100 @@ mod tests {
         assert_eq!(FitMode::DontFit.label(), "Don't fit");
         assert_eq!(FitMode::ReduceOnly.label(), "Reduce only");
         assert_eq!(FitMode::AlwaysFit.label(), "Always fit");
+    }
+
+    #[test]
+    fn image_pixel_at_maps_inside() {
+        // 50x25 image at zoom 2 -> 100x50 on screen starting at (10, 20).
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 50.0));
+        assert_eq!(
+            image_pixel_at(egui::pos2(10.0, 20.0), rect, 2.0, 50, 25),
+            Some((0, 0))
+        );
+        assert_eq!(
+            image_pixel_at(egui::pos2(12.0, 22.0), rect, 2.0, 50, 25),
+            Some((1, 1))
+        );
+        assert_eq!(
+            image_pixel_at(egui::pos2(109.0, 69.0), rect, 2.0, 50, 25),
+            Some((49, 24))
+        );
+    }
+
+    #[test]
+    fn image_pixel_at_rejects_outside_and_edge() {
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 50.0));
+        // Left / above the rect.
+        assert_eq!(image_pixel_at(egui::pos2(9.0, 20.0), rect, 2.0, 50, 25), None);
+        assert_eq!(image_pixel_at(egui::pos2(10.0, 19.0), rect, 2.0, 50, 25), None);
+        // Below the rect (past the last row).
+        assert_eq!(image_pixel_at(egui::pos2(10.0, 71.0), rect, 2.0, 50, 25), None);
+        // Max edge maps to width/height, which are not pixels.
+        assert_eq!(image_pixel_at(egui::pos2(110.0, 70.0), rect, 2.0, 50, 25), None);
+    }
+
+    #[test]
+    fn image_pixel_at_guards_degenerate() {
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 50.0));
+        assert_eq!(image_pixel_at(egui::pos2(10.0, 20.0), rect, 0.0, 50, 25), None);
+        assert_eq!(image_pixel_at(egui::pos2(10.0, 20.0), rect, -1.0, 50, 25), None);
+        assert_eq!(image_pixel_at(egui::pos2(10.0, 20.0), rect, 2.0, 0, 25), None);
+        assert_eq!(image_pixel_at(egui::pos2(10.0, 20.0), rect, 2.0, 50, 0), None);
+    }
+
+    #[test]
+    fn html_hex_formats_uppercase_rgb() {
+        assert_eq!(html_hex([0, 0, 0, 255]), "#000000");
+        assert_eq!(html_hex([255, 255, 255, 255]), "#FFFFFF");
+        assert_eq!(html_hex([18, 52, 86, 255]), "#123456");
+        // Alpha is not part of the hex string.
+        assert_eq!(html_hex([18, 52, 86, 7]), "#123456");
+    }
+
+    fn covers(offsets: &[egui::Vec2], base: egui::Rect, p: egui::Pos2) -> bool {
+        offsets.iter().any(|o| base.translate(*o).contains(p))
+    }
+
+    #[test]
+    fn tile_offsets_covers_viewport() {
+        // 10x10 image centred in a 100x100 viewport at the origin -> needs
+        // 11x11 = 121 copies to cover; a generous cap admits them all.
+        let viewport = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0));
+        let image = egui::Rect::from_min_size(egui::pos2(45.0, 45.0), egui::vec2(10.0, 10.0));
+        let offsets = tile_offsets(viewport, image, 400);
+        assert_eq!(offsets[0], egui::Vec2::ZERO);
+        for p in [
+            egui::pos2(0.0, 0.0),
+            egui::pos2(99.0, 0.0),
+            egui::pos2(0.0, 99.0),
+            egui::pos2(99.0, 99.0),
+            egui::pos2(50.0, 50.0),
+        ] {
+            assert!(covers(&offsets, image, p), "point {p:?} not covered");
+        }
+    }
+
+    #[test]
+    fn tile_offsets_is_bounded_by_max_tiles() {
+        // A tiny image in a huge viewport would otherwise need millions of
+        // copies; the cap must bound the count.
+        let viewport =
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100_000.0, 100_000.0));
+        let image = egui::Rect::from_min_size(egui::pos2(50_000.0, 50_000.0), egui::vec2(1.0, 1.0));
+        for cap in [1usize, 4, 16, 64] {
+            let offsets = tile_offsets(viewport, image, cap);
+            assert!(offsets.len() <= cap, "cap {cap} exceeded: {}", offsets.len());
+            if cap > 0 {
+                assert_eq!(offsets[0], egui::Vec2::ZERO);
+            }
+        }
+        assert!(tile_offsets(viewport, image, 0).is_empty());
+    }
+
+    #[test]
+    fn tile_offsets_degenerate_image_returns_centre() {
+        let viewport = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0));
+        let zero = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::Vec2::ZERO);
+        assert_eq!(tile_offsets(viewport, zero, 64), vec![egui::Vec2::ZERO]);
     }
 }

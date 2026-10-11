@@ -57,6 +57,8 @@ pub struct AppSettings {
     pub scale_to_fit: bool,
     pub use_sharp_scaling: bool,
     pub checkerboard_bg: bool,
+    /// Repeat the image on a grid across the canvas ("seamless texture" view).
+    pub tile_repeat: bool,
     /// Zoom-reset behavior on image switch; see `ZoomReset`.
     pub zoom_reset: ZoomReset,
     /// How an image is fitted to the window on load / re-fit; see `FitMode`.
@@ -72,6 +74,7 @@ impl Default for AppSettings {
             scale_to_fit: true,
             use_sharp_scaling: false,
             checkerboard_bg: true,
+            tile_repeat: false,
             zoom_reset: ZoomReset::default(),
             fit_mode: crate::app::view::FitMode::ReduceOnly,
             sort_mode: SortMode::default(),
