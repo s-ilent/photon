@@ -16,18 +16,85 @@
 
 use std::io::{Seek, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ::image::codecs::bmp::BmpEncoder;
 use ::image::codecs::gif::GifEncoder;
 use ::image::codecs::jpeg::JpegEncoder;
-use ::image::codecs::png::PngEncoder;
+use ::image::codecs::png::{CompressionType, PngEncoder};
 use ::image::codecs::tga::TgaEncoder;
 use ::image::codecs::tiff::TiffEncoder;
 use ::image::codecs::webp::WebPEncoder;
 use ::image::imageops::{self, FilterType};
-use ::image::{ExtendedColorType, ImageEncoder, RgbaImage};
+use ::image::{ExtendedColorType, ImageEncoder, Rgba, RgbaImage};
 
 use crate::image_loader::load_image;
+
+/// Convolution filters (Roadmap Appendix A), applied by [`convolve`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FilterKind {
+    Blur,
+    Soften,
+    Sharpen,
+    Gaussian3,
+    Gaussian5,
+    Emboss,
+    Edge,
+}
+
+impl FilterKind {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            FilterKind::Blur => "Blur",
+            FilterKind::Soften => "Soften",
+            FilterKind::Sharpen => "Sharpen",
+            FilterKind::Gaussian3 => "Gaussian 3×3",
+            FilterKind::Gaussian5 => "Gaussian 5×5",
+            FilterKind::Emboss => "Emboss",
+            FilterKind::Edge => "Edge",
+        }
+    }
+
+    /// Row-major kernel, side length, divisor and bias (Roadmap Appendix A).
+    /// Emboss and Edge sum to zero, so their divisor is a no-op placeholder and
+    /// only the bias shifts the result; Appendix A does not state the Edge bias
+    /// (marked unconfirmed), so +127 is used.
+    fn parameters(self) -> (&'static [f32], usize, f32, f32) {
+        match self {
+            FilterKind::Blur => (&[1.0; 9], 3, 9.0, 0.0),
+            FilterKind::Soften => (&[1.0, 1.0, 1.0, 1.0, 8.0, 1.0, 1.0, 1.0, 1.0], 3, 16.0, 0.0),
+            FilterKind::Sharpen => (
+                &[-1.0, -1.0, -1.0, -1.0, 15.0, -1.0, -1.0, -1.0, -1.0],
+                3,
+                7.0,
+                0.0,
+            ),
+            FilterKind::Gaussian3 => (&[1.0, 2.0, 1.0, 2.0, 4.0, 2.0, 1.0, 2.0, 1.0], 3, 16.0, 0.0),
+            FilterKind::Gaussian5 => (
+                &[
+                    0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 3.0, 4.0, 3.0, 1.0, 2.0, 4.0, 8.0, 4.0, 2.0, 1.0,
+                    3.0, 4.0, 3.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0,
+                ],
+                5,
+                52.0,
+                0.0,
+            ),
+            FilterKind::Emboss => (
+                &[0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                3,
+                1.0,
+                127.0,
+            ),
+            FilterKind::Edge => (
+                &[-1.0, -1.0, -1.0, -1.0, 8.0, -1.0, -1.0, -1.0, -1.0],
+                3,
+                1.0,
+                127.0,
+            ),
+        }
+    }
+}
 
 /// A single step in a batch operation chain. Applied left-to-right, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +115,8 @@ pub(crate) enum Operation {
         height: Option<u32>,
         filter: ResampleFilter,
     },
+    /// Convolution filter (Appendix A), applied via [`convolve`].
+    Filter(FilterKind),
 }
 
 /// Resample kernels offered for [`Operation::Resize`], mapped to the `image`
@@ -119,11 +188,65 @@ pub(crate) fn apply_operations(
                     img = imageops::resize(&img, tw, th, filter.to_filter_type());
                 }
             }
+            Operation::Filter(kind) => {
+                let (kernel, k, divisor, bias) = kind.parameters();
+                img = convolve(&img, kernel, k, divisor, bias);
+            }
         }
     }
 
     let (w, h) = (img.width(), img.height());
     (img.into_raw(), w, h)
+}
+
+/// Apply a `k`×`k` row-major `kernel` to `src`. Sample coordinates are clamped
+/// into the image bounds (edge pixels repeat outward; nothing wraps). Each RGB
+/// channel becomes `clamp(sum(weight·sample) / divisor + bias, 0, 255)`; the
+/// source alpha is copied through unchanged. `divisor` 0 is treated as 1.
+pub(crate) fn convolve(
+    src: &RgbaImage,
+    kernel: &[f32],
+    k: usize,
+    divisor: f32,
+    bias: f32,
+) -> RgbaImage {
+    debug_assert_eq!(kernel.len(), k * k, "kernel must be k×k");
+    let (w, h) = (src.width(), src.height());
+    let mut out = RgbaImage::new(w, h);
+    if w == 0 || h == 0 {
+        return out;
+    }
+    let divisor = if divisor == 0.0 { 1.0 } else { divisor };
+    let half = (k / 2) as i64;
+    let (wi, hi) = (w as i64, h as i64);
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut acc = [0.0f32; 3];
+            for ky in 0..k as i64 {
+                for kx in 0..k as i64 {
+                    let sx = (x + kx - half).clamp(0, wi - 1) as u32;
+                    let sy = (y + ky - half).clamp(0, hi - 1) as u32;
+                    let px = src.get_pixel(sx, sy).0;
+                    let weight = kernel[(ky * k as i64 + kx) as usize];
+                    acc[0] += px[0] as f32 * weight;
+                    acc[1] += px[1] as f32 * weight;
+                    acc[2] += px[2] as f32 * weight;
+                }
+            }
+            let alpha = src.get_pixel(x as u32, y as u32).0[3];
+            out.put_pixel(
+                x as u32,
+                y as u32,
+                Rgba([
+                    ((acc[0] / divisor) + bias).clamp(0.0, 255.0).round() as u8,
+                    ((acc[1] / divisor) + bias).clamp(0.0, 255.0).round() as u8,
+                    ((acc[2] / divisor) + bias).clamp(0.0, 255.0).round() as u8,
+                    alpha,
+                ]),
+            );
+        }
+    }
+    out
 }
 
 /// Resolve a possibly-partial resize request into concrete target dimensions.
@@ -148,6 +271,26 @@ fn target_dimensions(
             Some((scaled.max(1), h.max(1)))
         }
         (None, None) => None,
+    }
+}
+
+/// Per-format encoder settings, threaded into [`OutputFormat::encode`] and the
+/// conversion entry points. WebP output is lossless-only in `image` 0.25 and
+/// `TiffEncoder` exposes no compression selector, so neither has a knob here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SaveOptions {
+    /// JPEG quality, 1..=100.
+    pub jpeg_quality: u8,
+    /// PNG DEFLATE effort.
+    pub png_compression: CompressionType,
+}
+
+impl Default for SaveOptions {
+    fn default() -> Self {
+        Self {
+            jpeg_quality: 90,
+            png_compression: CompressionType::Default,
+        }
     }
 }
 
@@ -177,30 +320,32 @@ impl OutputFormat {
         }
     }
 
-    /// Encode an RGBA8 buffer to `writer`. `jpeg_quality` is only consulted for
-    /// [`OutputFormat::Jpeg`]. GIF output is a single frame; an animated source
-    /// only ever reaches here as its first frame because `load_image` decodes
-    /// one frame.
+    /// Encode an RGBA8 buffer to `writer`, honouring the per-format knobs in
+    /// `options`. GIF output is a single frame; an animated source only ever
+    /// reaches here as its first frame because `load_image` decodes one frame.
     fn encode<W: Write + Seek>(
         &self,
         rgba: &[u8],
         width: u32,
         height: u32,
-        jpeg_quality: u8,
+        options: &SaveOptions,
         mut writer: W,
     ) -> Result<(), String> {
         let rgba_color = ExtendedColorType::Rgba8;
         let result = match self {
-            OutputFormat::Png => {
-                PngEncoder::new(writer).write_image(rgba, width, height, rgba_color)
-            }
+            OutputFormat::Png => PngEncoder::new_with_quality(
+                writer,
+                options.png_compression,
+                ::image::codecs::png::FilterType::Adaptive,
+            )
+            .write_image(rgba, width, height, rgba_color),
             OutputFormat::Jpeg => {
                 // JPEG has no alpha channel; drop it.
                 let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
                 for px in rgba.as_chunks::<4>().0 {
                     rgb.extend_from_slice(&px[..3]);
                 }
-                JpegEncoder::new_with_quality(writer, jpeg_quality).write_image(
+                JpegEncoder::new_with_quality(writer, options.jpeg_quality).write_image(
                     &rgb,
                     width,
                     height,
@@ -250,20 +395,23 @@ pub(crate) enum OverwritePolicy {
 }
 
 /// One unit of work: convert `source` into `target_dir` as `format`, after
-/// applying `operations`.
+/// applying `operations`. Encoder settings come from [`SaveOptions`].
 #[derive(Debug, Clone)]
 pub(crate) struct ConversionJob {
     pub source: PathBuf,
     pub target_dir: PathBuf,
     pub format: OutputFormat,
     pub operations: Vec<Operation>,
-    pub jpeg_quality: u8,
 }
 
 /// Convert a single file. Never panics on I/O or decode failure — every failure
 /// comes back as [`FileStatus::Failed`] (or [`FileStatus::Skipped`]) so one bad
 /// file cannot abort a batch.
-pub(crate) fn convert_file(job: &ConversionJob, policy: OverwritePolicy) -> FileStatus {
+pub(crate) fn convert_file(
+    job: &ConversionJob,
+    policy: OverwritePolicy,
+    options: &SaveOptions,
+) -> FileStatus {
     let stem = match job.source.file_stem() {
         Some(stem) => stem.to_os_string(),
         None => {
@@ -319,7 +467,7 @@ pub(crate) fn convert_file(job: &ConversionJob, policy: OverwritePolicy) -> File
     let mut writer = std::io::BufWriter::new(file);
     if let Err(e) = job
         .format
-        .encode(&rgba, width, height, job.jpeg_quality, &mut writer)
+        .encode(&rgba, width, height, options, &mut writer)
     {
         return FileStatus::Failed(e);
     }
@@ -337,10 +485,33 @@ pub(crate) fn convert_file(job: &ConversionJob, policy: OverwritePolicy) -> File
 ///
 /// `rayon`'s work-stealing `par_iter` bounds (and reuses) the thread pool;
 /// `collect` preserves input order, so callers can zip statuses to jobs.
-pub(crate) fn run_batch(jobs: &[ConversionJob], policy: OverwritePolicy) -> Vec<FileStatus> {
+pub(crate) fn run_batch(
+    jobs: &[ConversionJob],
+    policy: OverwritePolicy,
+    options: &SaveOptions,
+) -> Vec<FileStatus> {
+    run_batch_with_progress(jobs, policy, options, |_, _| {})
+}
+
+/// As [`run_batch`], but calls `on_progress(done, total)` from the worker
+/// threads as each job completes. `done` counts completions across all
+/// threads (not per-thread), so progress is determinate and monotonic.
+pub(crate) fn run_batch_with_progress<F: Fn(usize, usize) + Sync>(
+    jobs: &[ConversionJob],
+    policy: OverwritePolicy,
+    options: &SaveOptions,
+    on_progress: F,
+) -> Vec<FileStatus> {
     use rayon::prelude::*;
+    let total = jobs.len();
+    let done = AtomicUsize::new(0);
     jobs.par_iter()
-        .map(|job| convert_file(job, policy))
+        .map(|job| {
+            let status = convert_file(job, policy, options);
+            let completed = done.fetch_add(1, Ordering::Relaxed) + 1;
+            on_progress(completed, total);
+            status
+        })
         .collect()
 }
 
@@ -486,11 +657,10 @@ mod tests {
             target_dir: out_dir,
             format: OutputFormat::Jpeg,
             operations: Vec::new(),
-            jpeg_quality: 90,
         };
 
         assert_eq!(
-            convert_file(&job, OverwritePolicy::Skip),
+            convert_file(&job, OverwritePolicy::Skip, &SaveOptions::default()),
             FileStatus::Skipped("exists".to_string())
         );
         assert_eq!(
@@ -499,7 +669,7 @@ mod tests {
             "skip must not modify the existing target"
         );
         assert_eq!(
-            convert_file(&job, OverwritePolicy::Ask),
+            convert_file(&job, OverwritePolicy::Ask, &SaveOptions::default()),
             FileStatus::Skipped("exists".to_string())
         );
     }
@@ -518,10 +688,16 @@ mod tests {
             target_dir: out_dir.clone(),
             format: OutputFormat::Jpeg,
             operations: Vec::new(),
-            jpeg_quality: 85,
         };
 
-        assert_eq!(convert_file(&job, OverwritePolicy::Overwrite), FileStatus::Success);
+        let options = SaveOptions {
+            jpeg_quality: 85,
+            ..Default::default()
+        };
+        assert_eq!(
+            convert_file(&job, OverwritePolicy::Overwrite, &options),
+            FileStatus::Success
+        );
 
         let target = out_dir.join("photo.jpg");
         assert!(target.exists(), "target {} was not written", target.display());
@@ -553,7 +729,6 @@ mod tests {
                 target_dir: out_dir.clone(),
                 format: OutputFormat::Png,
                 operations: Vec::new(),
-                jpeg_quality: 90,
             })
             .collect();
         jobs.push(ConversionJob {
@@ -561,15 +736,138 @@ mod tests {
             target_dir: out_dir.clone(),
             format: OutputFormat::Png,
             operations: Vec::new(),
-            jpeg_quality: 90,
         });
 
-        let statuses = run_batch(&jobs, OverwritePolicy::Overwrite);
+        let statuses = run_batch(&jobs, OverwritePolicy::Overwrite, &SaveOptions::default());
         assert_eq!(statuses.len(), jobs.len());
         assert!(matches!(statuses[0], FileStatus::Success));
         assert!(matches!(statuses[1], FileStatus::Success));
         assert!(matches!(statuses[2], FileStatus::Success));
         assert!(matches!(statuses[3], FileStatus::Success));
         assert!(matches!(statuses[4], FileStatus::Failed(_)));
+    }
+
+    #[test]
+    fn convolve_blur_keeps_a_uniform_field_uniform() {
+        let src = RgbaImage::from_pixel(4, 3, Rgba([100, 100, 100, 255]));
+        let out = convolve(&src, &[1.0; 9], 3, 9.0, 0.0);
+        assert_eq!(out.dimensions(), (4, 3));
+        assert!(out.pixels().all(|px| px.0 == [100, 100, 100, 255]));
+    }
+
+    #[test]
+    fn convolve_blur_spreads_an_isolated_bright_pixel() {
+        let mut src = RgbaImage::from_pixel(5, 5, Rgba([0, 0, 0, 255]));
+        src.put_pixel(2, 2, Rgba([255, 0, 0, 255]));
+        let out = convolve(&src, &[1.0; 9], 3, 9.0, 0.0);
+        // 255 / 9 rounds to 28; only the 3×3 block around the centre gains it.
+        assert_eq!(out.get_pixel(2, 2).0[0], 28);
+        assert_eq!(out.get_pixel(1, 1).0[0], 28);
+        assert_eq!(out.get_pixel(3, 3).0[0], 28);
+        assert_eq!(out.get_pixel(0, 0).0[0], 0);
+        assert_eq!(out.get_pixel(4, 4).0[0], 0);
+    }
+
+    #[test]
+    fn convolve_identity_kernel_round_trips() {
+        let mut src = RgbaImage::new(2, 1);
+        src.put_pixel(0, 0, Rgba([1, 2, 3, 4]));
+        src.put_pixel(1, 0, Rgba([250, 128, 0, 9]));
+        let out = convolve(&src, &[1.0], 1, 1.0, 0.0);
+        assert_eq!(out.get_pixel(0, 0).0, [1, 2, 3, 4]);
+        assert_eq!(out.get_pixel(1, 0).0, [250, 128, 0, 9]);
+    }
+
+    #[test]
+    fn convolve_preserves_source_alpha() {
+        let mut src = RgbaImage::new(3, 1);
+        src.put_pixel(0, 0, Rgba([10, 10, 10, 11]));
+        src.put_pixel(1, 0, Rgba([255, 255, 255, 22]));
+        src.put_pixel(2, 0, Rgba([10, 10, 10, 33]));
+        let out = convolve(&src, &[1.0; 9], 3, 9.0, 0.0);
+        assert_eq!(out.get_pixel(0, 0).0[3], 11);
+        assert_eq!(out.get_pixel(1, 0).0[3], 22);
+        assert_eq!(out.get_pixel(2, 0).0[3], 33);
+    }
+
+    #[test]
+    fn filter_operation_applies_through_apply_operations() {
+        let src = gray_pixels(&[100; 9]); // uniform 3x3
+        let (out, w, h) = apply_operations(src, 3, 3, &[Operation::Filter(FilterKind::Blur)]);
+        assert_eq!((w, h), (3, 3));
+        assert!(gray_levels(&out).iter().all(|&v| v == 100));
+    }
+
+    #[test]
+    fn filter_edge_applies_bias_to_a_flat_field() {
+        // Edge sums to zero, so a flat field becomes the +127 bias.
+        let (out, ..) = apply_operations(
+            gray_pixels(&[0; 4]),
+            2,
+            2,
+            &[Operation::Filter(FilterKind::Edge)],
+        );
+        assert!(gray_levels(&out).iter().all(|&v| v == 127));
+    }
+
+    #[test]
+    fn filter_labels_are_distinct() {
+        let kinds = [
+            FilterKind::Blur,
+            FilterKind::Soften,
+            FilterKind::Sharpen,
+            FilterKind::Gaussian3,
+            FilterKind::Gaussian5,
+            FilterKind::Emboss,
+            FilterKind::Edge,
+        ];
+        let mut labels: Vec<&str> = kinds.iter().map(|k| k.label()).collect();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), kinds.len());
+    }
+
+    #[test]
+    fn save_options_default_matches_the_ui_defaults() {
+        let options = SaveOptions::default();
+        assert_eq!(options.jpeg_quality, 90);
+        assert_eq!(options.png_compression, CompressionType::Default);
+    }
+
+    #[test]
+    fn run_batch_with_progress_counts_every_job() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out_dir = dir.path().join("out");
+        let jobs: Vec<ConversionJob> = (0..3)
+            .map(|i| {
+                let source = dir.path().join(format!("p{i}.png"));
+                RgbaImage::from_pixel(2, 2, Rgba([i as u8, 0, 0, 255]))
+                    .save(&source)
+                    .expect("save source");
+                ConversionJob {
+                    source,
+                    target_dir: out_dir.clone(),
+                    format: OutputFormat::Png,
+                    operations: Vec::new(),
+                }
+            })
+            .collect();
+
+        let max_done = AtomicUsize::new(0);
+        let seen_total = AtomicUsize::new(0);
+        let statuses = run_batch_with_progress(
+            &jobs,
+            OverwritePolicy::Overwrite,
+            &SaveOptions::default(),
+            |done, total| {
+                max_done.fetch_max(done, Ordering::Relaxed);
+                seen_total.store(total, Ordering::Relaxed);
+            },
+        );
+
+        assert_eq!(statuses.len(), jobs.len());
+        assert!(statuses.iter().all(|s| matches!(s, FileStatus::Success)));
+        assert_eq!(max_done.load(Ordering::Relaxed), 3);
+        assert_eq!(seen_total.load(Ordering::Relaxed), 3);
     }
 }
