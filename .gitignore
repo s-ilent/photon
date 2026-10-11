@@ -23,6 +23,9 @@ target
 # Build output
 /target/
 
+# Parallel agent worktrees
+/.worktrees/
+
 # Editor
 .idea/
 .vscode/

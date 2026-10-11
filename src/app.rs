@@ -18,6 +18,10 @@ mod config;
 mod loader;
 mod saver;
 mod theme;
+// Fit/zoom geometry (Roadmap.md §3). Temporary `allow`: the pure functions
+// land here first; the canvas/UI wiring is a follow-up integration step.
+#[allow(dead_code)]
+mod view;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Priority {
