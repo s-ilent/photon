@@ -17,8 +17,10 @@ Core philosophy: zero-latency paging through folders of images (tens of thousand
 
 ### Supported image formats
 
-Formats selectable in the file dialog and recognized by the directory walker (`src/dir_walker.rs`):
-`png`, `jpg`, `jpeg`, `gif`, `bmp`, `tiff`, `tif`, `webp`, `dds`, `exr`.
+Formats recognized by the directory walker and the file dialog, from the single
+source of truth `dir_walker::SUPPORTED_EXTENSIONS`:
+`png`, `jpg`, `jpeg`, `gif`, `bmp`, `tiff`, `tif`, `webp`, `dds`, `exr`, `tga`,
+`pnm`, `pbm`, `pgm`, `ppm`, `ico`, `cur`, `hdr`.
 
 Most decoding is performed by the `image` crate (features enabled in `Cargo.toml`), which decodes everything to RGBA8 on the CPU before GPU upload. `.dds` files are the exception: `image_loader::load_dds` routes them through `image_dds` (BC1–BC7, uncompressed, and DX10-header files) and decodes **every layer** — cubemap faces in DirectX order (+X, -X, +Y, -Y, +Z, -Z) and texture-array entries — as separate RGBA buffers (`DecodedImage.layers`, capped at 64 layers). The worker uploads each layer as its own `Rgba8Unorm` texture; `PhotonApp::layer_texture_ids`/`current_layer` track the displayed one and the bottom bar shows face/layer buttons. The loader worker additionally rejects images whose width or height exceed `device.limits().max_texture_dimension_2d` (or are zero), surfacing an error overlay instead of failing asynchronously in wgpu validation. Note: the ambitious "upload BC1–BC7 DDS compressed bytes straight to VRAM" plan in `Plan.md` is **not** what the current code does — the pipeline decodes to RGBA8 and uploads as `Rgba8Unorm`, mip 0 only. Treat `Plan.md` and `iced.md` as historical design notes, not as a description of current behavior.
 
@@ -75,8 +77,8 @@ src/
 ├── commands.rs          # Command registry (Roadmap §1): `Command` enum, `default_bindings()`, `PhotonApp::run_command()` — the single key→action table.
 ├── ui.rs                # Module root for the ui/ submodule.
 ├── app.rs               # PhotonApp state struct + shared types (Priority, WorkerMessage, LoadResult, StatusOverlay, SaveStatus, MouseMode, SortMode, ZoomReset, AppSettings). Module root for the app/ submodule.
-├── dir_walker.rs        # DirWalker: fast non-recursive (max_depth=1, non-hidden) scan of supported image files.
-├── image_loader.rs      # load_image() -> Result<DecodedImage, DecodeError>: DDS via image_dds, everything else via the image crate; one RGBA8 buffer per layer.
+├── dir_walker.rs        # DirWalker + `SUPPORTED_EXTENSIONS` (single source of truth for recognised formats; reused by the Open dialog): fast non-recursive (max_depth=1, non-hidden) scan of supported image files.
+├── image_loader.rs      # load_image() -> Result<DecodedImage, DecodeError>: DDS via image_dds, everything else via the image crate with Exif orientation applied at decode (upright pixels, dimensions swapped for 90/270); one RGBA8 buffer per layer.
 ├── render.rs            # Image canvas render pass: WGSL pipeline, tile chunking, DrawImageCallback (see "GPU / render pipeline").
 ├── ui/
 │   ├── toolbar.rs       # Top panel body (open/copy/paste/save, mouse mode, sidebar toggle, prev/next).
@@ -104,7 +106,7 @@ src/
 - `SaveStatus` — transient bottom-bar message for save success/failure (set by `app/saver.rs`, polled via `check_save_status`).
 - `MouseMode::{Browse, Navigate, Select}` — cycles with Tab/Backslash. Changes how mouse input is interpreted (see canvas.rs).
 - `SortMode` — six modes (alphabetical, alphabetical desc, date modified newest/oldest, file size largest/smallest). Applied to `self.images` in `sort_images`.
-- `AppSettings` — user-facing settings exposed in the Settings window (theme, font size, scale-to-fit, sharp scaling, checkerboard background, keep zoom, sort mode).
+- `AppSettings` — user-facing settings exposed in the Settings window (theme, font size, scale-to-fit, sharp scaling, checkerboard background, zoom-reset, fit mode, sort mode).
 
 ### Runtime architecture (concurrency model)
 
@@ -162,18 +164,18 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **fifty-one unit tests** across ten files, all pure-CPU:
+The suite is **sixty unit tests** across ten files, all pure-CPU:
 
 - `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, and Copy/Paste carry their raw-key fallbacks.
 - `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
-- `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; and `DecodeError::is_unsupported_format` classification (Roadmap §8).
+- `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; a no-Exif decode is byte-identical; and an Exif `orientation=6` PNG fixture decodes with swapped dimensions and a rotation permutation (Roadmap §3); plus `DecodeError::is_unsupported_format` classification (Roadmap §8).
 - `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, zero-size guards, `clamp_zoom` bounds, `zoom_to_fill`, and `ZoomLock`. (Pure; the canvas/UI wiring is a later step.)
 - `render.rs` — tile `chunk_grid` math (single tile, split grids, exact multiples) and the uniform struct's WGSL-compatible layout.
-- `dir_walker.rs` — `test_is_supported_image` (extension recognition).
+- `dir_walker.rs` — `is_supported_image` extension recognition (including the tga/pnm/ico/hdr additions) and `SUPPORTED_EXTENSIONS` is lowercase with no duplicates.
 - `app/clipboard.rs` — three `crop_rgba` tests (empty rect, single pixel, clamping) and a `current_rgba` test for following the displayed layer.
 - `app/saver.rs` — PNG and JPEG encoders write decodable files (JPEG drops alpha).
 - `app/loader.rs` — zoom-reset semantics (`ZoomReset::DimensionChange`/`Never`/`Always`), sharp-scaling sampler pick, and directory-refresh semantics (place preserved without reload / reload on mtime change / landing when the current file vanishes) on cached loads, exercised through `request_current`/`apply_dir_refresh` without a GPU.
-- `app/config.rs` — RON config: empty file → defaults, roundtrip, partial file fills defaults, malformed file → defaults.
+- `app/config.rs` — RON config: empty file → defaults, roundtrip, partial file fills defaults (incl. `fit_mode` → `ReduceOnly`), malformed file → defaults.
 
 There are no integration tests and no test harness for the actual GPU/worker upload path (which needs a live wgpu device). When adding behavior to pure, side-effect-free functions (path filtering, crop math, encoder wrappers, cache-hit state transitions, config parsing), add `#[cfg(test)]` unit tests next to the code, matching the existing pattern. Do not attempt to unit-test code that requires a live wgpu device or an egui context.
 

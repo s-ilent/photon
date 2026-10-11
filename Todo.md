@@ -76,17 +76,16 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
       `Command` registry + binding table + `run_command` dispatch — landed
       2026-10-11 (Roadmap §1 step 1); remaining is the config-file table and a
       Settings rebinding UI.
-- [ ] **Exif auto-rotate on load** (`Roadmap.md` §3) — orient before fit and
-      scrollbar math; source the orientation from the `image` crate's decoder or
-      `kamadak-exif` (also feeds the metadata panel).
+- [x] **Exif auto-rotate on load** (`Roadmap.md` §3) — DONE 2026-10-11: applied
+      at decode in `image_loader.rs` via the `image` crate's
+      `into_decoder`/`orientation`/`apply_orientation` (no new dep); dimensions
+      swap for 90/270. Landscape/portrait phone photos now load upright.
 - [ ] **Fit modes + zoom set** (`Roadmap.md` §3) — don't-fit / reduce-only /
       always-fit, fit-window per axis + centre, zoom 100 % / to-desktop / lock.
-      Fit + zoom limits are WIRED (2026-10-11): `app/view.rs` `fit_zoom` drives
-      the canvas fit and `zoom_limits` the wheel zoom, so a 100k-px panorama can
-      zoom out to fit and a 24-px icon in to fill (the old fixed 0.1–50 clamps
-      are gone). Remaining: a fit-mode Setting (DontFit/AlwaysFit — the enum is
-      ready), fit-window-per-axis + centre, zoom 100 %/to-desktop buttons, and
-      wiring `ZoomLock`.
+      Fit + zoom limits + the fit-mode Setting + `Fit`/`100%` toolbar buttons
+      are WIRED (2026-10-11). Remaining: fit-window-per-axis + centre,
+      zoom-to-desktop, and wiring `ZoomLock` (last `#[allow(dead_code)]` in
+      `app/view.rs`).
 - [ ] **Status-bar pixel readout** (`Roadmap.md` §3) — RGB / alpha / HTML hex
       under the cursor.
 - [ ] **Content-based format detection** (`Roadmap.md` §5) — sniff bytes,
@@ -171,6 +170,16 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-11 (batch 2: viewing/extras)
+- **Exif auto-rotate on load** — orientation applied at decode in
+  `image_loader.rs` (image crate API; dims swap for 90/270).
+- **Fit-mode setting + `Fit`/`100%` toolbar buttons** — `AppSettings.fit_mode`
+  drives the canvas fit; buttons re-fit / reset to 100%.
+- **Codecs** — `image` features tga/pnm/ico/hdr enabled (in-crate, no new
+  deps); `dir_walker::SUPPORTED_EXTENSIONS` is now the single source of truth
+  and the Open dialog reuses it.
+- 60 unit tests; build and clippy warning-free.
 
 ### 2026-10-11 (roadmap intake + first parallel workstreams)
 - Docs: `Roadmap.md` added (forward feature map; scope fixed by a scoping
