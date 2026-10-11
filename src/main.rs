@@ -1,4 +1,5 @@
 mod app;
+mod commands;
 mod dir_walker;
 mod image_loader;
 mod input;
@@ -43,37 +44,10 @@ impl eframe::App for app::PhotonApp {
             }
         });
 
-        // Shortcut / Interaction Handling
-        let actions = input::take_shortcut_actions(&ctx);
-
-        // Execute Actions
-        if actions.open {
-            self.open_file();
-        }
-        if actions.save {
-            log::debug!("Save triggered");
-            self.save_image_as();
-        }
-        if actions.copy {
-            log::debug!("Stateful Copy Triggered");
-            self.copy_to_clipboard();
-        }
-        if actions.paste {
-            log::debug!("Stateful Paste Triggered");
-            self.paste_from_clipboard(&ctx);
-        }
-        if actions.mode_switch {
-            self.cycle_mode();
-        }
-        if actions.next {
-            self.next_image();
-        }
-        if actions.prev {
-            self.prev_image();
-        }
-        if actions.fullscreen {
-            let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+        // Shortcut / Interaction Handling: scan the command registry's key
+        // bindings, then dispatch each through the single command spine.
+        for command in input::take_commands(&ctx) {
+            self.run_command(command, &ctx);
         }
 
         // Drag-and-drop: open a dropped folder, or a dropped file together
