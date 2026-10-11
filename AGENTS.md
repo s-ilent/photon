@@ -89,14 +89,16 @@ src/
 └── app/
     ├── loader.rs        # Worker thread (decode + GPU tile upload), LRU texture cache, speculative neighbor preload, directory load + watcher, sorting.
     ├── canvas.rs        # Image workspace: zoom/pan/selection drawing, checkerboard background, input handling per mouse mode.
-    ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, fit_zoom, zoom_limits (adaptive, image-derived), zoom_to_fill, ZoomLock. fit_zoom/zoom_limits wired into canvas, zoom_percent_label into the info bar; fit-mode choice + zoom lock await the Settings UI.
+    ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, fit_zoom, zoom_limits (adaptive, image-derived), zoom_to_fill, ZoomLock, image_pixel_at, html_hex, tile_offsets. fit/zoom + pixel readout + tile-repeat wired into canvas/info bar; ZoomLock awaits the Settings UI.
+    ├── settings.rs      # AppSettings + SortMode + ZoomReset (split out of app.rs), re-exported from app.rs so paths are unchanged.
+    ├── batch.rs         # Batch conversion engine (Roadmap §5): Operation chain, OutputFormat, ConversionJob, convert_file/run_batch (std::thread driver). Engine only — no UI yet (`#[allow(dead_code)]`).
     ├── clipboard.rs     # Copy (with optional crop from selection) and paste via arboard; current_rgba() source of truth for displayed bytes.
     ├── config.rs        # Settings persistence: config.ron via serde + RON, config dir via the directories crate.
     ├── saver.rs         # Save / Save Selection As: rfd save-as dialog, background encode, bottom-bar status feedback.
     └── theme.rs         # Dracula color theme + custom font loading from ../font.ttf.
 ```
 
-### Key types and enums (in `src/app.rs`)
+### Key types and enums (in `src/app.rs` and `src/app/settings.rs`)
 
 - `PhotonApp` — the central state struct (texture cache, worker channels, zoom/pan/selection, settings, GPU device/queue/render_state handles). Fields are `pub(crate)` and methods are `pub(crate)`; the crate is a binary, so there is no public API.
 - `Priority::{Active, Preload}` — worker request priority. `Active` is the image the user is currently viewing; `Preload` is the speculative neighbor load.
@@ -106,7 +108,7 @@ src/
 - `SaveStatus` — transient bottom-bar message for save success/failure (set by `app/saver.rs`, polled via `check_save_status`).
 - `MouseMode::{Browse, Navigate, Select}` — cycles with Tab/Backslash. Changes how mouse input is interpreted (see canvas.rs).
 - `SortMode` — six modes (alphabetical, alphabetical desc, date modified newest/oldest, file size largest/smallest). Applied to `self.images` in `sort_images`.
-- `AppSettings` — user-facing settings exposed in the Settings window (theme, font size, scale-to-fit, sharp scaling, checkerboard background, zoom-reset, fit mode, sort mode).
+- `AppSettings` (in `app/settings.rs`) — user-facing settings exposed in the Settings window (theme, font size, scale-to-fit, sharp scaling, checkerboard background, tile-repeat, zoom-reset, fit mode, sort mode). Re-exported from `app.rs`.
 
 ### Runtime architecture (concurrency model)
 
@@ -164,12 +166,13 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **sixty unit tests** across ten files, all pure-CPU:
+The suite is **eighty unit tests** across eleven files, all pure-CPU:
 
 - `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, and Copy/Paste carry their raw-key fallbacks.
 - `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; a no-Exif decode is byte-identical; and an Exif `orientation=6` PNG fixture decodes with swapped dimensions and a rotation permutation (Roadmap §3); plus `DecodeError::is_unsupported_format` classification (Roadmap §8).
-- `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, zero-size guards, `clamp_zoom` bounds, `zoom_to_fill`, and `ZoomLock`. (Pure; the canvas/UI wiring is a later step.)
+- `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, adaptive `zoom_limits`, zero-size guards, `clamp_to_limits`, `zoom_to_fill`, `ZoomLock`, plus the pixel-readout helpers (`image_pixel_at`, `html_hex`) and `tile_offsets`. Pure.
+- `app/batch.rs` — the conversion engine (Roadmap §5): rotate/flip/grayscale (documented luma)/negative/resize on known buffers, `OutputFormat::extension`, overwrite-skip, and an end-to-end PNG→JPEG via `tempfile`. Pure/CPU; no GPU.
 - `render.rs` — tile `chunk_grid` math (single tile, split grids, exact multiples) and the uniform struct's WGSL-compatible layout.
 - `dir_walker.rs` — `is_supported_image` extension recognition (including the tga/pnm/ico/hdr additions) and `SUPPORTED_EXTENSIONS` is lowercase with no duplicates.
 - `app/clipboard.rs` — three `crop_rgba` tests (empty rect, single pixel, clamping) and a `current_rgba` test for following the displayed layer.

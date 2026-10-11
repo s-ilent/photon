@@ -46,11 +46,11 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
       the pipeline decodes/uploads mip 0 only
       (`decode_layers_mipmaps_dds(.., 0..1)`), so a mip selector needs either
       per-mip decode on demand or the full chain at load.
-- [ ] **Batch converter + operation chain** (`Roadmap.md` §5) — `rayon`
-      `par_iter` convert/save; a real "Convert…" dialog with per-file status,
-      overwrite policy, continue-on-error. Chain ops: format + save options,
-      resize (resample filters), rotate/flip/grayscale/negative, convolution
-      filters. Needs the command registry (`Roadmap.md` §1) for the chain.
+- [~] **Batch converter + operation chain** (`Roadmap.md` §5) — engine core
+      DONE (`app/batch.rs`, 2026-10-11): operations + formats + overwrite +
+      `std::thread` parallel driver (`rayon` not in the lock). REMAINING: the
+      "Convert…" dialog + live progress, per-format save options, convolution
+      filters, recipe import/export, and menu/registry wiring.
 - [ ] **Batch rename** (`Roadmap.md` §5) — mask tokens (file/image attrs,
       counters), search-and-replace, live preview, reorderable list.
 - [ ] **Full browser** (`Roadmap.md` §7) — thumbnail grid + disk cache, views,
@@ -86,8 +86,17 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
       are WIRED (2026-10-11). Remaining: fit-window-per-axis + centre,
       zoom-to-desktop, and wiring `ZoomLock` (last `#[allow(dead_code)]` in
       `app/view.rs`).
-- [ ] **Status-bar pixel readout** (`Roadmap.md` §3) — RGB / alpha / HTML hex
-      under the cursor.
+- [x] **Status-bar pixel readout** (`Roadmap.md` §3) — DONE 2026-10-11:
+      hovered pixel (RGB/alpha/hex) in the info bar, click-to-copy; sampled from
+      `active_rgba` (blank on cache-hit loads). Tile-repeat ("seamless texture")
+      view also landed: `settings.tile_repeat` draws the image in a viewport-
+      covering grid (canvas-only, no shader change).
+- [x] **Batch conversion engine** (`Roadmap.md` §5) — DONE 2026-10-11 (core):
+      `app/batch.rs` — `Operation` chain (rotate/flip/grayscale/negative/resize
+      with the resample filters), `OutputFormat` encoders, overwrite policy,
+      per-file `FileStatus`, `std::thread` parallel `run_batch`. Remaining:
+      convolution filters, per-format save options, recipe import/export, and
+      the "Convert…" UI dialog + progress.
 - [ ] **Content-based format detection** (`Roadmap.md` §5) — sniff bytes,
       honour them when the extension lies.
 - [x] **Decode-error enum** (`Roadmap.md` §8) — DONE 2026-10-11: typed
@@ -170,6 +179,14 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-11 (batch 3: viewing + batch engine)
+- **Concern split** — `AppSettings`/`SortMode`/`ZoomReset` moved to
+  `app/settings.rs` (re-exported) to cut `app.rs` contention.
+- **Pixel readout + tile-repeat view** (Roadmap §3).
+- **Batch conversion engine core** — `app/batch.rs` (Roadmap §5; `std::thread`,
+  not `rayon` — not in the lock).
+- 80 unit tests; build and clippy warning-free.
 
 ### 2026-10-11 (batch 2: viewing/extras)
 - **Exif auto-rotate on load** — orientation applied at decode in
