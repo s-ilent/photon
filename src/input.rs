@@ -1,25 +1,9 @@
 use crate::commands::{self, Command};
 use eframe::egui;
 
-/// One frame's worth of shortcut actions, scanned off the egui input state.
-///
-/// Kept as the compatibility surface for `take_shortcut_actions` and its
-/// tests; the live dispatch path uses [`take_commands`] directly.
-#[allow(dead_code)]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ShortcutActions {
-    pub(crate) open: bool,
-    pub(crate) save: bool,
-    pub(crate) copy: bool,
-    pub(crate) paste: bool,
-    pub(crate) mode_switch: bool,
-    pub(crate) next: bool,
-    pub(crate) prev: bool,
-    pub(crate) fullscreen: bool,
-}
-
 /// Scan this frame's input for commands, driven by the registry's default
-/// binding table ([`commands::default_bindings`]).
+/// binding table ([`commands::default_bindings`]) — the single place a key is
+/// associated with an action.
 ///
 /// GOTCHA: egui-winit rewrites Ctrl+C / Ctrl+V / Ctrl+X at the input layer
 /// into `Event::Copy` / `Event::Paste` / `Event::Cut` (its TextEdit clipboard
@@ -51,25 +35,9 @@ pub(crate) fn take_commands(ctx: &egui::Context) -> Vec<Command> {
         i.events
             .retain(|event| !matches!(event, egui::Event::Copy | egui::Event::Paste(_)));
 
-        // Copy/Paste ride the command events above, so their table row is
-        // `None`; these are the fallbacks for backends that deliver the raw
-        // key instead of rewriting it.
-        for (command, shortcut) in [
-            (
-                Command::Copy,
-                egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::C),
-            ),
-            (
-                Command::Paste,
-                egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::V),
-            ),
-        ] {
-            if i.consume_shortcut(&shortcut) {
-                push_once(&mut commands, command);
-            }
-        }
-
-        // Everything else is a single key read straight off the binding table.
+        // Key path, straight off the binding table. The Copy/Paste rows are
+        // their raw-key fallback for backends that don't rewrite Ctrl+C/V;
+        // `push_once` keeps that from double-firing with the events above.
         for &(command, shortcut) in commands::default_bindings() {
             if let Some(shortcut) = shortcut {
                 if i.consume_shortcut(&shortcut) {
@@ -90,41 +58,20 @@ fn push_once(commands: &mut Vec<Command>, command: Command) {
     }
 }
 
-/// Compatibility adapter over [`take_commands`] preserving the old
-/// `ShortcutActions` shape (and its tests). The live path calls
-/// [`take_commands`] and dispatches through `PhotonApp::run_command`.
-#[allow(dead_code)]
-pub(crate) fn take_shortcut_actions(ctx: &egui::Context) -> ShortcutActions {
-    let mut actions = ShortcutActions::default();
-    for command in take_commands(ctx) {
-        match command {
-            Command::Open => actions.open = true,
-            Command::SaveImageAs => actions.save = true,
-            Command::Copy => actions.copy = true,
-            Command::Paste => actions.paste = true,
-            Command::CycleMouseMode => actions.mode_switch = true,
-            Command::NextImage => actions.next = true,
-            Command::PrevImage => actions.prev = true,
-            Command::ToggleFullscreen => actions.fullscreen = true,
-        }
-    }
-    actions
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn with_events(events: Vec<egui::Event>) -> ShortcutActions {
+    fn with_events(events: Vec<egui::Event>) -> Vec<Command> {
         let ctx = egui::Context::default();
         let raw = egui::RawInput {
             events,
             ..Default::default()
         };
         ctx.begin_pass(raw);
-        let actions = take_shortcut_actions(&ctx);
+        let commands = take_commands(&ctx);
         let _ = ctx.end_pass();
-        actions
+        commands
     }
 
     fn key_event(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
@@ -140,48 +87,59 @@ mod tests {
     /// The real winit path: egui-winit rewrites Ctrl+C/V into command events.
     #[test]
     fn clipboard_command_events_trigger_copy_and_paste() {
-        let actions = with_events(vec![egui::Event::Copy]);
-        assert!(actions.copy);
-        assert!(!actions.paste);
+        let commands = with_events(vec![egui::Event::Copy]);
+        assert!(commands.contains(&Command::Copy));
+        assert!(!commands.contains(&Command::Paste));
 
-        let actions = with_events(vec![egui::Event::Paste("pixels".into())]);
-        assert!(actions.paste);
-        assert!(!actions.copy);
+        let commands = with_events(vec![egui::Event::Paste("pixels".into())]);
+        assert!(commands.contains(&Command::Paste));
+        assert!(!commands.contains(&Command::Copy));
     }
 
     /// Fallback for backends that deliver the raw key instead of rewriting it.
     #[test]
     fn ctrl_c_and_ctrl_v_key_events_trigger_copy_and_paste() {
-        let actions = with_events(vec![key_event(egui::Key::C, egui::Modifiers::COMMAND)]);
-        assert!(actions.copy);
+        let commands = with_events(vec![key_event(egui::Key::C, egui::Modifiers::COMMAND)]);
+        assert!(commands.contains(&Command::Copy));
 
-        let actions = with_events(vec![key_event(egui::Key::V, egui::Modifiers::COMMAND)]);
-        assert!(actions.paste);
+        let commands = with_events(vec![key_event(egui::Key::V, egui::Modifiers::COMMAND)]);
+        assert!(commands.contains(&Command::Paste));
     }
 
     #[test]
     fn navigation_and_mode_shortcuts_still_work() {
-        let actions = with_events(vec![key_event(egui::Key::Space, egui::Modifiers::NONE)]);
-        assert!(actions.next);
+        let commands = with_events(vec![key_event(egui::Key::Space, egui::Modifiers::NONE)]);
+        assert!(commands.contains(&Command::NextImage));
 
-        let actions = with_events(vec![key_event(egui::Key::ArrowLeft, egui::Modifiers::NONE)]);
-        assert!(actions.prev);
+        let commands = with_events(vec![key_event(egui::Key::ArrowLeft, egui::Modifiers::NONE)]);
+        assert!(commands.contains(&Command::PrevImage));
 
-        let actions = with_events(vec![key_event(egui::Key::Tab, egui::Modifiers::NONE)]);
-        assert!(actions.mode_switch);
+        let commands = with_events(vec![key_event(egui::Key::Tab, egui::Modifiers::NONE)]);
+        assert!(commands.contains(&Command::CycleMouseMode));
+    }
+
+    /// A command bound to two keys (Space and →) fires once, not twice.
+    #[test]
+    fn a_two_key_command_dispatches_once() {
+        let commands = with_events(vec![
+            key_event(egui::Key::Space, egui::Modifiers::NONE),
+            key_event(egui::Key::ArrowRight, egui::Modifiers::NONE),
+        ]);
+        assert_eq!(
+            commands.iter().filter(|c| **c == Command::NextImage).count(),
+            1
+        );
     }
 
     #[test]
     fn plain_key_press_without_shortcut_is_ignored() {
-        let actions = with_events(vec![key_event(egui::Key::C, egui::Modifiers::NONE)]);
-        assert!(!actions.copy);
-        assert!(!actions.open);
-        assert!(!actions.save);
+        let commands = with_events(vec![key_event(egui::Key::C, egui::Modifiers::NONE)]);
+        assert!(commands.is_empty());
     }
 
     #[test]
     fn f11_toggles_fullscreen() {
-        let actions = with_events(vec![key_event(egui::Key::F11, egui::Modifiers::NONE)]);
-        assert!(actions.fullscreen);
+        let commands = with_events(vec![key_event(egui::Key::F11, egui::Modifiers::NONE)]);
+        assert!(commands.contains(&Command::ToggleFullscreen));
     }
 }

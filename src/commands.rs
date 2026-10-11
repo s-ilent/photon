@@ -80,10 +80,11 @@ impl Command {
 ///
 /// One row per (command, key) pair. A command bound to two keys by default
 /// (Tab/Backslash, Space/→, Backspace/←) appears once per key; its rows are
-/// adjacent and carry the same [`Command`]. A command whose real trigger is a
-/// clipboard *command event* rather than a key (Copy/Paste — see the GOTCHA in
-/// `input.rs`) appears once with `None`. Every command in [`Command::all`] has
-/// at least one row.
+/// adjacent and carry the same [`Command`]. Copy/Paste appear with their
+/// Ctrl/Cmd+C/V key as the raw-key fallback — on winit egui rewrites that key
+/// into a clipboard *command event* before we see it (see the GOTCHA in
+/// `input.rs`), which `input.rs` also honours. Every command in [`Command::all`]
+/// has at least one row.
 pub(crate) fn default_bindings() -> &'static [(Command, Option<egui::KeyboardShortcut>)] {
     use egui::{Key, KeyboardShortcut, Modifiers};
 
@@ -96,9 +97,15 @@ pub(crate) fn default_bindings() -> &'static [(Command, Option<egui::KeyboardSho
             Command::SaveImageAs,
             Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::S)),
         ),
-        // Copy/Paste: delivered as egui::Event::Copy / Event::Paste on winit.
-        (Command::Copy, None),
-        (Command::Paste, None),
+        // Raw-key fallback; the winit path arrives as Event::Copy/Paste.
+        (
+            Command::Copy,
+            Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::C)),
+        ),
+        (
+            Command::Paste,
+            Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::V)),
+        ),
         (
             Command::CycleMouseMode,
             Some(KeyboardShortcut::new(Modifiers::NONE, Key::Backslash)),
@@ -198,14 +205,18 @@ mod tests {
     }
 
     #[test]
-    fn copy_and_paste_have_no_key_binding() {
-        // Their real trigger is egui::Event::Copy / Event::Paste (input.rs).
-        assert!(default_bindings()
-            .iter()
-            .any(|(c, s)| *c == Command::Copy && s.is_none()));
-        assert!(default_bindings()
-            .iter()
-            .any(|(c, s)| *c == Command::Paste && s.is_none()));
+    fn copy_and_paste_have_key_fallbacks() {
+        // Their primary trigger is egui::Event::Copy / Event::Paste (input.rs);
+        // the table carries the raw-key fallback for backends that don't rewrite.
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        assert!(default_bindings().contains(&(
+            Command::Copy,
+            Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::C))
+        )));
+        assert!(default_bindings().contains(&(
+            Command::Paste,
+            Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::V))
+        )));
     }
 
     #[test]
