@@ -1,6 +1,11 @@
+use crate::commands::{self, Command};
 use eframe::egui;
 
 /// One frame's worth of shortcut actions, scanned off the egui input state.
+///
+/// Kept as the compatibility surface for `take_shortcut_actions` and its
+/// tests; the live dispatch path uses [`take_commands`] directly.
+#[allow(dead_code)]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ShortcutActions {
     pub(crate) open: bool,
@@ -13,7 +18,8 @@ pub(crate) struct ShortcutActions {
     pub(crate) fullscreen: bool,
 }
 
-/// Scan this frame's key presses and clipboard commands.
+/// Scan this frame's input for commands, driven by the registry's default
+/// binding table ([`commands::default_bindings`]).
 ///
 /// GOTCHA: egui-winit rewrites Ctrl+C / Ctrl+V / Ctrl+X at the input layer
 /// into `Event::Copy` / `Event::Paste` / `Event::Cut` (its TextEdit clipboard
@@ -24,89 +30,84 @@ pub(crate) struct ShortcutActions {
 /// App-level handling deliberately takes these events before any widget:
 /// Photon has no TextEdits today, but if one is ever added, it will not see
 /// Ctrl+C/V and needs its own handling.
-pub(crate) fn take_shortcut_actions(ctx: &egui::Context) -> ShortcutActions {
-    let mut actions = ShortcutActions::default();
+pub(crate) fn take_commands(ctx: &egui::Context) -> Vec<Command> {
+    let mut commands = Vec::new();
 
     ctx.input_mut(|i| {
-        if i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::COMMAND,
-            egui::Key::O,
-        )) {
-            actions.open = true;
-        }
-        if i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::COMMAND,
-            egui::Key::S,
-        )) {
-            actions.save = true;
-        }
-        if i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::COMMAND,
-            egui::Key::C,
-        )) {
-            actions.copy = true;
-        }
-
         // The real winit path: egui-winit turned Ctrl+C/V into command events.
         // Consume them so no widget sees them later in the pass.
-        if i
-            .events
+        if i.events
             .iter()
             .any(|event| matches!(event, egui::Event::Copy))
         {
-            actions.copy = true;
+            push_once(&mut commands, Command::Copy);
         }
-        if i
-            .events
+        if i.events
             .iter()
             .any(|event| matches!(event, egui::Event::Paste(_)))
         {
-            actions.paste = true;
+            push_once(&mut commands, Command::Paste);
         }
         i.events
             .retain(|event| !matches!(event, egui::Event::Copy | egui::Event::Paste(_)));
 
-        if i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::COMMAND,
-            egui::Key::V,
-        )) {
-            actions.paste = true;
+        // Copy/Paste ride the command events above, so their table row is
+        // `None`; these are the fallbacks for backends that deliver the raw
+        // key instead of rewriting it.
+        for (command, shortcut) in [
+            (
+                Command::Copy,
+                egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::C),
+            ),
+            (
+                Command::Paste,
+                egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::V),
+            ),
+        ] {
+            if i.consume_shortcut(&shortcut) {
+                push_once(&mut commands, command);
+            }
         }
-        if i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::NONE,
-            egui::Key::Backslash,
-        )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::NONE,
-            egui::Key::Tab,
-        )) {
-            actions.mode_switch = true;
-        }
-        if i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::NONE,
-            egui::Key::Space,
-        )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::NONE,
-            egui::Key::ArrowRight,
-        )) {
-            actions.next = true;
-        }
-        if i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::NONE,
-            egui::Key::Backspace,
-        )) || i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::NONE,
-            egui::Key::ArrowLeft,
-        )) {
-            actions.prev = true;
-        }
-        if i.consume_shortcut(&egui::KeyboardShortcut::new(
-            egui::Modifiers::NONE,
-            egui::Key::F11,
-        )) {
-            actions.fullscreen = true;
+
+        // Everything else is a single key read straight off the binding table.
+        for &(command, shortcut) in commands::default_bindings() {
+            if let Some(shortcut) = shortcut {
+                if i.consume_shortcut(&shortcut) {
+                    push_once(&mut commands, command);
+                }
+            }
         }
     });
 
+    commands
+}
+
+/// Append `command` unless a binding for it already fired this frame, so a
+/// command bound to two keys (e.g. Space and →) still yields one entry.
+fn push_once(commands: &mut Vec<Command>, command: Command) {
+    if !commands.contains(&command) {
+        commands.push(command);
+    }
+}
+
+/// Compatibility adapter over [`take_commands`] preserving the old
+/// `ShortcutActions` shape (and its tests). The live path calls
+/// [`take_commands`] and dispatches through `PhotonApp::run_command`.
+#[allow(dead_code)]
+pub(crate) fn take_shortcut_actions(ctx: &egui::Context) -> ShortcutActions {
+    let mut actions = ShortcutActions::default();
+    for command in take_commands(ctx) {
+        match command {
+            Command::Open => actions.open = true,
+            Command::SaveImageAs => actions.save = true,
+            Command::Copy => actions.copy = true,
+            Command::Paste => actions.paste = true,
+            Command::CycleMouseMode => actions.mode_switch = true,
+            Command::NextImage => actions.next = true,
+            Command::PrevImage => actions.prev = true,
+            Command::ToggleFullscreen => actions.fullscreen = true,
+        }
+    }
     actions
 }
 
