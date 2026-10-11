@@ -70,6 +70,22 @@ impl app::PhotonApp {
                 {
                     self.next_image();
                 }
+                ui.separator();
+                if ui
+                    .button(format!("{} Fit", icons::ARROWS_OUT_SIMPLE))
+                    .on_hover_text("Fit to window")
+                    .clicked()
+                {
+                    self.needs_fit = true;
+                }
+                if ui
+                    .button("100%")
+                    .on_hover_text("Actual size")
+                    .clicked()
+                {
+                    self.zoom = 1.0;
+                    self.pan = egui::Vec2::ZERO;
+                }
             });
         });
     }

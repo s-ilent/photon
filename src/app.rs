@@ -19,9 +19,10 @@ mod loader;
 mod saver;
 mod theme;
 // Fit/zoom geometry (Roadmap.md §3). `fit_zoom`/`zoom_limits` are wired into
-// the canvas and `zoom_percent_label` into the info bar; the remaining
-// primitives (FitMode's non-default variants, ZoomLock) await the Settings UI,
-// hence the temporary `allow`.
+// the canvas, `zoom_percent_label` into the info bar, and `FitMode` is now
+// user-selectable (Settings + Fit/100% toolbar buttons). Only `ZoomLock`
+// (lock-zoom-across-navigation) still awaits wiring, hence the temporary
+// `allow`.
 #[allow(dead_code)]
 pub(crate) mod view;
 
@@ -177,6 +178,8 @@ pub struct AppSettings {
     pub checkerboard_bg: bool,
     /// Zoom-reset behavior on image switch; see `ZoomReset`.
     pub zoom_reset: ZoomReset,
+    /// How an image is fitted to the window on load / re-fit; see `FitMode`.
+    pub fit_mode: crate::app::view::FitMode,
     pub sort_mode: SortMode,
 }
 
@@ -189,6 +192,7 @@ impl Default for AppSettings {
             use_sharp_scaling: false,
             checkerboard_bg: true,
             zoom_reset: ZoomReset::default(),
+            fit_mode: crate::app::view::FitMode::ReduceOnly,
             sort_mode: SortMode::default(),
         }
     }
