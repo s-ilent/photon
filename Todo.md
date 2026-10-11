@@ -4,6 +4,10 @@ Living worklist, re-prioritized 2026-10-11 after the config/logging/shortcut
 pass. Per CLAUDE.md, do not delete pre-existing dead code opportunistically;
 list it here and address it deliberately.
 
+The long horizon — the full forward feature map, grouped by capability — lives
+in `Roadmap.md`. This file is the near-term, moving slice of it; when something
+on the roadmap comes into focus, add it here with a concrete plan.
+
 ---
 
 ## Recommended order
@@ -13,17 +17,24 @@ What's next, in the order I'd do it:
 1. **Shader pass M3: native BCn upload** — compressed DDS bytes straight to
    VRAM (no CPU decode), per-format pipeline variants. The pass machinery
    (M1/M2) landed 2026-10-11; this is the next chunk of the arc.
-2. **Batch converter** — `rayon` `par_iter` convert/save with a real
-   "Convert…" dialog. Independent of the shader work; can slot in anytime.
-3. **Imagine-style texture sidebar** — DEFERRED: the user is designing this.
+2. **Command registry + params serialisation** (`Roadmap.md` §1) — the spine
+   that makes key-configuration, batch, and a scripting CLI cheap; build it
+   before those three so they share one dispatch table.
+3. **Batch converter** — `rayon` `par_iter` convert/save with a real
+   "Convert…" dialog. Independent of the shader work; can slot in anytime
+   (richer design in `Roadmap.md` §7).
+4. **Near-term viewing polish** (`Roadmap.md` §3) — fit modes, zoom set
+   (100 % / to-desktop / lock), Exif auto-rotate on load, status-bar pixel
+   readout, tile-repeat ("seamless texture") view. Small, high-visibility.
+5. **Texture inspection sidebar** — DEFERRED: the user is designing this.
    Implement only against their design when it's ready.
-4. **Property map mode** — when a spec exists.
+6. **Property map mode** — when a spec exists.
 
 ---
 
 ## Features & behavior gaps
 
-- [ ] **Imagine-style texture sidebar** — DEFERRED by the user (2026-10-11):
+- [ ] **Texture inspection sidebar** — DEFERRED by the user (2026-10-11):
       they are designing it; implement only against that design. Covers mip
       levels, texture-array entries, and cubemap faces in one tree,
       superseding the bottom-bar face buttons. Needs a mip-decode decision:
@@ -48,7 +59,19 @@ What's next, in the order I'd do it:
       max texture dimension and reassembled in image space; the oversized
       rejection is gone. Remaining limit is RAM for the CPU-side decode.
 - [ ] **Key configuration** — user-configurable shortcut map (config.ron);
-      F11 fullscreen and all others become remappable then.
+      F11 fullscreen and all others become remappable then. Substrate is the
+      command registry (`Roadmap.md` §1).
+- [ ] **Exif auto-rotate on load** (`Roadmap.md` §3) — orient before fit and
+      scrollbar math; needs `kamadak-exif` (also feeds the metadata panel).
+- [ ] **Fit modes + zoom set** (`Roadmap.md` §3) — don't-fit / reduce-only /
+      always-fit, fit-window per axis + centre, zoom 100 % / to-desktop / lock.
+- [ ] **Status-bar pixel readout** (`Roadmap.md` §3) — RGB / alpha / HTML hex
+      under the cursor.
+- [ ] **Content-based format detection** (`Roadmap.md` §5) — sniff bytes,
+      honour them when the extension lies.
+- [ ] **Decode-error enum** (`Roadmap.md` §5) — replaces the `"Failed to
+      decode"` string-prefix classification between `image_loader.rs` and
+      `app/loader.rs`; lands with the `thiserror` reintroduction below.
 
 ## Shader pass milestones (the long arc)
 
@@ -187,7 +210,10 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ## Out of scope / reference only
 
 - `examples~/`, `gemini/`, `iced.md`, `Plan.md`, `scratch/`, `agents/all.txt` —
-  AI scratch and historical design docs. Not part of the product.
+  AI scratch and historical design docs. Not part of the product. (`Plan.md` is
+  the original design vision and predates the shader pass; trust `src/` over it.)
+- `Roadmap.md` — the forward feature map (tracked, unlike the files above).
+  Long-horizon plan; this file pulls the near-term items out of it.
 - `DDS-investigation.md` — investigation record; its short-term mitigations
   shipped (size guard + per-layer decode). `/tmp/ddstest` is obsolete.
 - GUI framework decision: **stay on egui** (reviewed 2026-10-11 against

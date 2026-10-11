@@ -186,7 +186,7 @@ Run tests with `cargo test --release` (debug builds are slow to compile and run 
 
 - The build and `cargo clippy --release` are currently **warning-free**; keep it that way.
 - The loader worker classifies decode errors for the overlay by **string prefix** (`"Failed to decode"` → UnsupportedFormat) between `image_loader.rs` and `app/loader.rs` — brittle but intentional; keep the prefixes in sync if you touch either side.
-- `Todo.md` is the live worklist (open feature gaps, perf items, deferred shader-pass work). Check it before planning changes.
+- `Todo.md` is the live worklist (open feature gaps, perf items, deferred shader-pass work). `Roadmap.md` is the long-horizon forward feature map (grouped by capability, with algorithm/CLI reference appendices). Check both before planning changes.
 
 ---
 
@@ -201,7 +201,7 @@ Many extra files in the repo are **ignored by git** (see `.gitignore`) and are A
 - `scratch/` — throwaway experiments (`refactor.py`, `test_egui.rs`). Not built, not referenced by `Cargo.toml`.
 - `agents/all.txt` — a concatenated copy of the "Pragmatic Rust Guidelines" reference. Read for style expectations; it is not project-specific configuration.
 
-`CLAUDE.md` and `Todo.md` are tracked and are **project-specific guidance** — read `CLAUDE.md` before making changes.
+`CLAUDE.md`, `Todo.md` and `Roadmap.md` are tracked and are **project-specific guidance** — read `CLAUDE.md` before making changes. `Roadmap.md` is the forward feature map (capability roadmap + algorithm/CLI reference); `Todo.md` is its near-term slice.
 
 ---
 
