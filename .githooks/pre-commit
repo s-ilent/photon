@@ -1,0 +1,53 @@
+#!/bin/sh
+# =============================================================================
+# pre-commit — agent commits carry the agent identity.
+#
+# The owner's personal identity lives in the ambient global git config, so a
+# plain `git commit` in an agent session attributes the work to the owner.
+# ZCode exports the markers below to every process it spawns, so an agent-driven
+# commit carries them and the owner's own terminal does not. Block that case and
+# point the session at tools/agent_git.sh, which forces the agent identity.
+#
+# Adapted from cannon-seed/.githooks/pre-commit (rule 4). That hook's other
+# rules protect a decompilation repo (the config/sha1/ oracle, generated asm/,
+# copyrighted disc dirs) and do not apply to Photon.
+#
+# Install with:  git config core.hooksPath .githooks
+#
+# CAVEAT: if ZCode ever renames these markers the check stops firing, and agent
+# commits silently revert to the owner's identity. Re-verify this list after a
+# client upgrade.
+# =============================================================================
+set -e
+
+OWNER_EMAIL='16026653+s-ilent@users.noreply.github.com'
+
+agent_session=0
+for marker in "$ZCODE_ENV" "$ZCODE_APP_VERSION" "$ZCODE_BASE_URL" "$ZCODE_PROCESS_LABEL"; do
+    if [ -n "$marker" ]; then agent_session=1; fi
+done
+case "${APPIMAGE:-}${APPDIR:-}" in *ZCode*) agent_session=1 ;; esac
+
+if [ "$agent_session" = 1 ] && [ "${ALLOW_OWNER_IDENT:-}" != "1" ]; then
+    owner_hit=0
+    for ident in "$(git var GIT_AUTHOR_IDENT)" "$(git var GIT_COMMITTER_IDENT)"; do
+        case "$ident" in *"$OWNER_EMAIL"*) owner_hit=1 ;; esac
+    done
+    if [ "$owner_hit" = 1 ]; then
+        echo "ERROR: an agent session is committing under the repository owner's name:" >&2
+        echo "  author:    $(git var GIT_AUTHOR_IDENT)" >&2
+        echo "  committer: $(git var GIT_COMMITTER_IDENT)" >&2
+        echo "" >&2
+        echo "Agent commits carry the agent identity; the owner's name must never" >&2
+        echo "appear on work an agent performed. Commit with:" >&2
+        echo "  sh tools/agent_git.sh commit -m '<message>'" >&2
+        echo "Both identities are checked: setting only GIT_AUTHOR_NAME/EMAIL" >&2
+        echo "leaves the committer as the owner and still fails." >&2
+        echo "" >&2
+        echo "Only if the owner is the one committing from inside this session:" >&2
+        echo "  ALLOW_OWNER_IDENT=1 git commit ..." >&2
+        exit 1
+    fi
+fi
+
+exit 0
