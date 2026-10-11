@@ -41,6 +41,29 @@ impl FitMode {
     }
 }
 
+/// How the window itself is resized to an image on load (Roadmap.md §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FitWindow {
+    /// Leave the window size alone.
+    #[default]
+    DontFit,
+    /// Grow the window when it is smaller than the image.
+    EnlargeIfSmaller,
+    /// Always size the window to the image.
+    AlwaysResize,
+}
+
+impl FitWindow {
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            FitWindow::DontFit => "Don't resize the window",
+            FitWindow::EnlargeIfSmaller => "Enlarge the window if smaller than the image",
+            FitWindow::AlwaysResize => "Always resize the window",
+        }
+    }
+}
+
 /// The zoom scalar that fits `image` inside `available` under `mode`.
 ///
 /// Degenerate sizes (zero or negative on either axis) fall back to `1.0` so a
@@ -68,6 +91,63 @@ pub(crate) fn zoom_to_fill(available: egui::Vec2, image: egui::Vec2) -> f32 {
         return 1.0;
     }
     (available.x / image.x).max(available.y / image.y)
+}
+
+/// New window size when fitting it to `image`, per axis and independently.
+///
+/// `DontFit` keeps `current_window`; `EnlargeIfSmaller` grows an axis only when
+/// the window is smaller than the image on it; `AlwaysResize` takes the image
+/// size. Each axis is then clamped to `monitor` so the window never exceeds the
+/// work area. A degenerate monitor axis (zero or negative) leaves that axis
+/// unclamped, and non-finite inputs collapse to zero rather than propagating.
+pub(crate) fn fit_window_size(
+    image: egui::Vec2,
+    current_window: egui::Vec2,
+    monitor: egui::Vec2,
+    mode: FitWindow,
+) -> egui::Vec2 {
+    let target = match mode {
+        FitWindow::DontFit => current_window,
+        FitWindow::EnlargeIfSmaller => current_window.max(image),
+        FitWindow::AlwaysResize => image,
+    };
+    egui::vec2(
+        clamp_window_axis(target.x, monitor.x),
+        clamp_window_axis(target.y, monitor.y),
+    )
+}
+
+/// Clamp one window axis to a monitor axis. A degenerate limit (zero or
+/// negative) only floors the axis at zero; a non-finite length becomes zero.
+fn clamp_window_axis(len: f32, limit: f32) -> f32 {
+    if !len.is_finite() {
+        return 0.0;
+    }
+    if limit > 0.0 {
+        len.clamp(0.0, limit)
+    } else {
+        len.max(0.0)
+    }
+}
+
+/// Top-left position that centres a `window` of the given size inside `monitor`.
+///
+/// Negative on an axis when the window is larger than the monitor there, which
+/// pushes the window's overflow evenly off both edges.
+pub(crate) fn centered_window_pos(window: egui::Vec2, monitor: egui::Vec2) -> egui::Vec2 {
+    (monitor - window) * 0.5
+}
+
+/// Zoom that fits `image` inside `monitor` without upscaling past `1.0`: the
+/// limiting-axis ratio, capped at 1.0.
+///
+/// This is fit-to-monitor, distinct from fit-to-window. Degenerate sizes fall
+/// back to `1.0` so an unknown image size cannot produce NaN or infinity.
+pub(crate) fn zoom_to_desktop(image: egui::Vec2, monitor: egui::Vec2) -> f32 {
+    if image.x <= 0.0 || image.y <= 0.0 || monitor.x <= 0.0 || monitor.y <= 0.0 {
+        return 1.0;
+    }
+    (monitor.x / image.x).min(monitor.y / image.y).min(1.0)
 }
 
 /// The interactive `(min, max)` zoom range for this image and viewport.
@@ -494,5 +574,140 @@ mod tests {
         let viewport = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 100.0));
         let zero = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::Vec2::ZERO);
         assert_eq!(tile_offsets(viewport, zero, 64), vec![egui::Vec2::ZERO]);
+    }
+
+    #[test]
+    fn fit_window_default_is_dont_fit() {
+        assert_eq!(FitWindow::default(), FitWindow::DontFit);
+    }
+
+    #[test]
+    fn fit_window_labels() {
+        assert_eq!(FitWindow::DontFit.label(), "Don't resize the window");
+        assert_eq!(
+            FitWindow::EnlargeIfSmaller.label(),
+            "Enlarge the window if smaller than the image"
+        );
+        assert_eq!(FitWindow::AlwaysResize.label(), "Always resize the window");
+    }
+
+    #[test]
+    fn fit_window_dont_fit_keeps_current_size() {
+        let size = fit_window_size(
+            v(800.0, 600.0),
+            v(400.0, 300.0),
+            v(1920.0, 1080.0),
+            FitWindow::DontFit,
+        );
+        assert_eq!(size, v(400.0, 300.0));
+    }
+
+    #[test]
+    fn fit_window_enlarge_if_smaller_only_grows() {
+        // Window smaller than the image on x only: x grows, y stays.
+        assert_eq!(
+            fit_window_size(
+                v(800.0, 300.0),
+                v(400.0, 500.0),
+                v(1920.0, 1080.0),
+                FitWindow::EnlargeIfSmaller
+            ),
+            v(800.0, 500.0)
+        );
+        // Window larger than the image on both axes: unchanged.
+        assert_eq!(
+            fit_window_size(
+                v(200.0, 100.0),
+                v(400.0, 500.0),
+                v(1920.0, 1080.0),
+                FitWindow::EnlargeIfSmaller
+            ),
+            v(400.0, 500.0)
+        );
+    }
+
+    #[test]
+    fn fit_window_always_resize_takes_image_size() {
+        assert_eq!(
+            fit_window_size(
+                v(800.0, 600.0),
+                v(400.0, 300.0),
+                v(1920.0, 1080.0),
+                FitWindow::AlwaysResize
+            ),
+            v(800.0, 600.0)
+        );
+    }
+
+    #[test]
+    fn fit_window_clamps_to_monitor() {
+        assert_eq!(
+            fit_window_size(
+                v(4000.0, 2000.0),
+                v(400.0, 300.0),
+                v(1920.0, 1080.0),
+                FitWindow::AlwaysResize
+            ),
+            v(1920.0, 1080.0)
+        );
+    }
+
+    #[test]
+    fn fit_window_guards_degenerate_sizes() {
+        // Zero image: AlwaysResize collapses to zero, still finite.
+        let size = fit_window_size(
+            v(0.0, 0.0),
+            v(400.0, 300.0),
+            v(1920.0, 1080.0),
+            FitWindow::AlwaysResize,
+        );
+        assert_eq!(size, v(0.0, 0.0));
+        // Degenerate monitor axes leave the axis unclamped, never NaN.
+        let size = fit_window_size(
+            v(800.0, 600.0),
+            v(400.0, 300.0),
+            v(0.0, -10.0),
+            FitWindow::AlwaysResize,
+        );
+        assert_eq!(size, v(800.0, 600.0));
+        assert!(size.x.is_finite() && size.y.is_finite());
+        // Non-finite target collapses to zero.
+        let size = fit_window_size(
+            v(f32::INFINITY, 600.0),
+            v(400.0, 300.0),
+            v(1920.0, 1080.0),
+            FitWindow::AlwaysResize,
+        );
+        assert_eq!(size, v(0.0, 600.0));
+    }
+
+    #[test]
+    fn centered_window_pos_centers() {
+        assert_eq!(centered_window_pos(v(800.0, 600.0), v(1920.0, 1080.0)), v(560.0, 240.0));
+    }
+
+    #[test]
+    fn centered_window_pos_goes_negative_when_larger() {
+        // A window twice the monitor overhangs equally on both edges.
+        assert_eq!(centered_window_pos(v(200.0, 100.0), v(100.0, 100.0)), v(-50.0, 0.0));
+    }
+
+    #[test]
+    fn zoom_to_desktop_uses_limiting_axis() {
+        // 2000x1000 into 1000x2000: axis ratios 0.5 and 2.0 -> 0.5.
+        assert_eq!(zoom_to_desktop(v(2000.0, 1000.0), v(1000.0, 2000.0)), 0.5);
+    }
+
+    #[test]
+    fn zoom_to_desktop_never_upscales() {
+        // 100x100 into 1920x1080 would be 10.8, capped at 1.0.
+        assert_eq!(zoom_to_desktop(v(100.0, 100.0), v(1920.0, 1080.0)), 1.0);
+    }
+
+    #[test]
+    fn zoom_to_desktop_guards_degenerate_sizes() {
+        assert_eq!(zoom_to_desktop(v(0.0, 100.0), v(1920.0, 1080.0)), 1.0);
+        assert_eq!(zoom_to_desktop(v(100.0, 100.0), v(0.0, 1080.0)), 1.0);
+        assert_eq!(zoom_to_desktop(v(100.0, 100.0), v(1920.0, -1.0)), 1.0);
     }
 }
