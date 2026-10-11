@@ -218,6 +218,31 @@ the escalation path if a picked crate needs a fix upstream lacks.
 
 ## Done
 
+### 2026-10-12 (UI polish + cleanup pass)
+- **Dracula theme fixed** — it was only half-applied. egui buttons and
+  checkboxes read `weak_bg_fill`/`bg_fill` per widget state, and the theme
+  set only `bg_fill`, so button backgrounds fell back to egui's default grey
+  and the `hovered.bg_fill = purple` override was dead; selected items
+  (sidebar row, layer buttons, combo entries) used egui's default blue
+  `selection`. Now both fills are set per state (rest `#44475a`, hover
+  `#6272a4`, pressed/selected accent `#bd93f9`), `selection.bg_fill` is the
+  accent with dark text, `fg_stroke` is Dracula foreground so labels are not
+  default grey, and `extreme_bg_color` matches. Palette lives as `pub(crate)`
+  consts in `app/theme.rs`, shared with the sidebar and overlay.
+- **Light theme gets the font size** — the font-size slider only re-applied in
+  dark mode, so it was a no-op in light mode. Both themes now go through
+  `PhotonApp::apply_theme(dark, size)` (startup, font-size change, theme
+  toggle).
+- **Toolbar**: the sidebar toggle no longer shares the prev/next caret icons
+  (`SIDEBAR_SIMPLE`), and the mouse-mode button, gear, sidebar and prev/next
+  carry hover text.
+- **Comment cleanup**: removed narration comments in `ui/overlay.rs`; the
+  Settings sharp-scaling comment claimed the toggle "has no effect until then"
+  — sharp scaling has been live since M1/M2, so that was stale. Overlay icon
+  spacing unified (8px).
+- **Window**: minimum inner size 640×480.
+- No logic changes; 139 tests still green, build and clippy warning-free.
+
 ### 2026-10-12 (shader M3: native BCn upload + colour-space model)
 - **Native BC upload** (Roadmap §5b, shader M3): a BC1–BC7 DDS uploads its
   compressed mip-0 surfaces straight to VRAM when the device supports

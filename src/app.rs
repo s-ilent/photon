@@ -25,7 +25,9 @@ pub(crate) mod batch;
 // which re-uploads the result on the main thread.
 pub(crate) mod edit;
 pub(crate) mod settings;
-mod theme;
+// Dracula palette + theme setup; the palette consts are shared with the UI
+// modules (sidebar, overlay).
+pub(crate) mod theme;
 // Fit/zoom geometry (Roadmap.md §3): `fit_zoom`/`zoom_limits`/`ZoomLock` are
 // wired into the canvas, `zoom_percent_label` into the info bar,
 // `image_pixel_at`/`html_hex` into the cursor pixel readout, `tile_offsets`

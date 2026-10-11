@@ -19,11 +19,7 @@ impl eframe::App for app::PhotonApp {
         // 0. Initial Setup (First Frame)
         static STARTUP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
         if STARTUP.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            if self.settings.dark_mode {
-                app::PhotonApp::setup_dracula_theme(&ctx, self.settings.font_size);
-            } else {
-                app::PhotonApp::setup_light_theme(&ctx);
-            }
+            app::PhotonApp::apply_theme(&ctx, self.settings.dark_mode, self.settings.font_size);
             app::PhotonApp::load_custom_font(&ctx);
         }
 
@@ -120,6 +116,7 @@ fn main() -> eframe::Result<()> {
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1024.0, 768.0])
+                .with_min_inner_size([640.0, 480.0])
                 .with_resizable(true)
                 .with_decorations(true),
             wgpu_options: WgpuConfiguration {

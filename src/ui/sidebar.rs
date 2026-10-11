@@ -55,9 +55,10 @@ impl app::PhotonApp {
 
                 let is_selected = row == self.current_index;
                 let text = if is_selected {
+                    // Dark text reads on the accent selection fill.
                     egui::RichText::new(name)
                         .strong()
-                        .color(egui::Color32::from_rgb(189, 147, 249))
+                        .color(app::theme::BG)
                 } else {
                     egui::RichText::new(name)
                 };

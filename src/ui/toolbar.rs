@@ -78,11 +78,15 @@ impl app::PhotonApp {
 
         // Far-right elements are laid out first (right-to-left)
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(icons::GEAR).clicked() {
+            if ui.button(icons::GEAR).on_hover_text("Settings").clicked() {
                 self.settings_open = !self.settings_open;
             }
             ui.separator();
-            if ui.button(format!("Mode: {}", self.mode.name())).clicked() {
+            if ui
+                .button(format!("{} {}", icons::MOUSE_SIMPLE, self.mode.name()))
+                .on_hover_text("Mouse mode — click to cycle (Tab)")
+                .clicked()
+            {
                 self.cycle_mode();
             }
 
@@ -118,22 +122,30 @@ impl app::PhotonApp {
                     self.save_selection_as();
                 }
                 ui.separator();
-                let sidebar_btn = if self.sidebar_open {
-                    format!("{} Sidebar", icons::CARET_LEFT)
-                } else {
-                    format!("{} Sidebar", icons::CARET_RIGHT)
-                };
-                if ui.button(sidebar_btn).clicked() {
+                let sidebar_btn = format!("{} Sidebar", icons::SIDEBAR_SIMPLE);
+                if ui
+                    .button(sidebar_btn)
+                    .on_hover_text("Toggle the file list")
+                    .clicked()
+                {
                     self.sidebar_open = !self.sidebar_open;
                     if self.sidebar_open {
                         self.scroll_to_target = true;
                     }
                 }
                 ui.separator();
-                if ui.button(format!("{} Prev", icons::CARET_LEFT)).clicked() {
+                if ui
+                    .button(format!("{} Prev", icons::CARET_LEFT))
+                    .on_hover_text("Previous image (Left arrow)")
+                    .clicked()
+                {
                     self.prev_image();
                 }
-                if ui.button(format!("{} Next", icons::CARET_RIGHT)).clicked() {
+                if ui
+                    .button(format!("{} Next", icons::CARET_RIGHT))
+                    .on_hover_text("Next image (Right arrow)")
+                    .clicked()
+                {
                     self.next_image();
                 }
                 ui.separator();

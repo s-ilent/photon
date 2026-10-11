@@ -81,8 +81,8 @@ impl app::PhotonApp {
                         self.zoom_lock.unlock();
                     }
                 }
-                // Sharp (pixel) scaling is a shader-pass feature; the
-                // toggle persists but has no effect until then.
+                // Sharp (pixel) scaling is a live toggle: the shader snaps the
+                // sample point to the texel centre when magnified.
                 ui.checkbox(
                     &mut self.settings.use_sharp_scaling,
                     "Use Sharp (Pixel) Scaling",
@@ -101,19 +101,21 @@ impl app::PhotonApp {
                 ui.add(egui::Slider::new(&mut self.settings.font_size, 10.0..=60.0));
                 if self.settings.font_size != self.last_font_size {
                     self.last_font_size = self.settings.font_size;
-                    if self.settings.dark_mode {
-                        app::PhotonApp::setup_dracula_theme(ctx, self.settings.font_size);
-                    }
+                    app::PhotonApp::apply_theme(
+                        ctx,
+                        self.settings.dark_mode,
+                        self.settings.font_size,
+                    );
                 }
 
                 ui.separator();
                 if ui.button("Cycle Theme").clicked() {
                     self.settings.dark_mode = !self.settings.dark_mode;
-                    if self.settings.dark_mode {
-                        app::PhotonApp::setup_dracula_theme(ctx, self.settings.font_size);
-                    } else {
-                        app::PhotonApp::setup_light_theme(ctx);
-                    }
+                    app::PhotonApp::apply_theme(
+                        ctx,
+                        self.settings.dark_mode,
+                        self.settings.font_size,
+                    );
                 }
             });
     }
