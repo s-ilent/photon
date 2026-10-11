@@ -15,14 +15,15 @@ comes into focus, add it here with a concrete plan.
 
 What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
 
-1. **Shader pass M3: native BCn upload** — compressed DDS bytes straight to
-   VRAM (no CPU decode), per-format pipeline variants. The pass machinery
-   (M1/M2) landed 2026-10-11; this is the next chunk of the arc.
+1. **Shader M4: HDR + tonemap** — `Rgba32Float`/`Rgba16Float` float textures for
+   EXR and BC6H, exposure/gamma tonemap in the shader. The colour-space field
+   and the `linear_source` shader branch from M3 are its substrate. (M5 cubemap
+   view and the normal-map preview are the other shader-pass items.)
 2. **Command registry + params serialisation** (`Roadmap.md` §1) — the spine
    that makes key-rebinding, the CLI, and batch cheap; build it before those
    so they share one dispatch table.
-3. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC with the
-   shader pass.
+3. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC (now with the
+   `ColorSpace` field ready to consume).
 4. **Batch rename + the remaining batch items** (`Roadmap.md` §5) — recipe
    import/export and the interactive overwrite dialog (the chain, save options
    and progress landed 2026-10-12).
@@ -31,8 +32,9 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
    Implement only against their design when it's ready.
 7. **Property map mode** — when a spec exists.
 
-Done recently (2026-10-12): near-term viewing polish (§3) and the light editing
-core (§4) are complete; see the Done log. Next up is the shader M3 arc.
+Done recently (2026-10-12): viewing polish (§3), the editing core (§4), the
+batch polish (§5), and shader **M3 native BCn upload + the colour-space model**
+(§5b) are all complete; see the Done log. Next up is the shader M4 arc.
 
 ---
 
@@ -135,9 +137,20 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
       refcounting (`Arc<RenderImage>`); all manual free bookkeeping is gone.
       Color space: RGBA8 passes through untouched (sRGB-encoded, matching
       egui).
-- [ ] **M3: native BCn upload** — BC1–BC7 DDS bytes straight to VRAM (no CPU
-      decode); per-format pipeline variants (sRGB/blocky sample types), tile
-      reuse across faces. Fallback to CPU decode stays for exotic formats.
+- [x] **M3: native BCn upload** — DONE 2026-10-12. BC1–BC7 DDS bytes upload
+      straight to VRAM (no CPU decode) when the device supports
+      `TEXTURE_COMPRESSION_BC` and the image fits one texture; the CPU decode
+      is the fallback (unsupported/float formats, oversize, no feature). No new
+      pipeline was needed — a wgpu pipeline does not depend on the sampled
+      texture's format, only the texture does; the tile layout and single
+      linear sampler are unchanged (all BC unorm/snorm formats are filterable).
+      A compressed layer is one non-sRGB BC texture; copy/save/edit re-decode
+      from disk (the worker hands back no RGBA8 for a compressed layer).
+      Plus the **colour-space model**: `ColorSpace` (Srgb/Linear) on the image,
+      chosen to match the display pipeline (egui is a non-sRGB, gamma-space
+      target), so linear sources (EXR/HDR, non-sRGB DDS) are encoded to display
+      in `image.wgsl` — the field EXR/RAW and §9 ICC build on. Info bar shows
+      the colour space.
 - [x] **GPU test harness** (`Roadmap.md` §5b) — DONE 2026-10-11: headless
       adapter + `#[cfg(test)] mod gpu_tests` in `render.rs`; tests the real
       render pipeline builds and a compute pass round-trips, skipping cleanly
@@ -204,6 +217,32 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-12 (shader M3: native BCn upload + colour-space model)
+- **Native BC upload** (Roadmap §5b, shader M3): a BC1–BC7 DDS uploads its
+  compressed mip-0 surfaces straight to VRAM when the device supports
+  `TEXTURE_COMPRESSION_BC` and the image fits one texture — no CPU decode.
+  `DecodedFormat { Rgba8, Bc(BcKind) }` + `DecodeOptions { allow_bc, max_dim }`
+  + `load_image_opts`; `load_image` still returns RGBA8 for batch/clipboard/save.
+  The render path is format-aware: RGBA8 keeps chunked tiling, a BC layer is one
+  non-sRGB BC texture (`bytes_per_row = block_copy_size * ceil(width/4)`).
+  Fallbacks: no feature, Bc6h/float, uncompressed, oversize → CPU decode.
+  No new pipeline or WGSL sampler change (a pipeline doesn't depend on the
+  sampled texture's format).
+- **Colour-space model**: `ColorSpace { Srgb, Linear }` on `DecodedImage`,
+  carried to `RenderImage` and `PhotonApp::current_color_space` (info-bar
+  readout). Verified the pass is display/gamma-space (egui prefers a non-sRGB
+  surface and emits sRGB-encoded values), so an sRGB image is stored in a
+  **non-sRGB** texture and passed through, and a **linear** source (EXR/HDR,
+  non-sRGB DDS) is encoded to display in `image.wgsl` (`gamma_from_linear_rgb`
+  + the `Globals::linear_source` flag) before tint. Existing appearance is
+  unchanged for PNG/JPEG/legacy-DXT (sRGB); non-sRGB-flagged DDS and EXR now
+  render correctly (they were previously shown linear-as-if-encoded).
+- GPU test uploads a hand-built BC1 texture and reads back the sampled pixel
+  (skips without the BC feature). Tests: 131 → 139.
+- Deviation from the plan: no `*UnormSrgb` texture variants — in a gamma-space
+  pass they would hardware-linearise and show wrong; the flag drives a shader
+  encode instead. The colour-space field is the substrate for §9 ICC and M4 HDR.
 
 ### 2026-10-12 (editing + viewing polish + batch polish)
 - **Interactive editing wired** (Roadmap §4): `apply_edit`/`undo_edit`/`redo_edit`

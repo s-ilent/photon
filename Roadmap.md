@@ -173,7 +173,14 @@ GPU path sharing kernels with any interactive preview.
 headless harness — a `tests/` integration test that acquires an adapter
 (Vulkan is available on this machine) and runs a trivial compute pass, skipping
 cleanly when no adapter exists — as the substrate for the compute-filter work
-and the existing render pass.
+and the existing render pass. *(Shipped 2026-10-11.)*
+
+**Native-format upload (shader M3) — shipped 2026-10-12.** BC1–BC7 DDS bytes now
+upload straight to VRAM (no CPU decode) where the device supports
+`TEXTURE_COMPRESSION_BC` and the image fits one texture; the CPU decode is the
+fallback. This introduced the **colour-space model** (`ColorSpace` on the image:
+`Srgb`/`Linear`) because the canvas is a display/gamma-space pass — the field is
+what EXR/HDR/RAW and the ICC output profile (§9) key off.
 
 ## 6. Panorama creator
 
@@ -237,6 +244,8 @@ Cross-cutting:
 - [ ] **ICC colour management** — enable, input profile for untagged images,
       output profile (display / sRGB / custom), rendering intent (perceptual,
       relative colorimetric, saturation, absolute); applied in the shader pass.
+      *(The `ColorSpace` field on each image — added with M3, 2026-10-12 — and
+      the `linear_source` shader branch are the substrate.)*
 - **Out of scope:** IPTC and GPS *editing panels* and GPS→map URLs. (IPTC/XMP
   are still *preserved* on save, per the line above.)
 
