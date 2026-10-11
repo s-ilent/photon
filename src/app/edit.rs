@@ -41,6 +41,7 @@ impl Rgba {
     }
 
     /// Number of pixels (`width * height`).
+    #[allow(dead_code)] // retained; no current caller, kept per the no-opportunistic-deletion rule
     fn pixel_count(&self) -> usize {
         self.width as usize * self.height as usize
     }
@@ -186,6 +187,20 @@ impl Rgba {
     }
 }
 
+/// A single whole-image edit (Roadmap §4), in the form the menu and command
+/// registry dispatch. Crop reads the current selection at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditOp {
+    RotateLeft,
+    RotateRight,
+    Rotate180,
+    FlipHorizontal,
+    FlipVertical,
+    Crop,
+    Grayscale,
+    Negative,
+}
+
 /// Maximum number of whole-image snapshots retained by [`UndoStack`]. Past this
 /// the oldest state is evicted, bounding memory to `UNDO_LIMIT ×` one image.
 pub(crate) const UNDO_LIMIT: usize = 32;
@@ -208,6 +223,11 @@ pub(crate) struct UndoStack {
 impl UndoStack {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// True when no snapshot has been recorded yet.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.history.is_empty()
     }
 
     /// Push a new snapshot as the current state. Any snapshots past the cursor
@@ -265,7 +285,12 @@ mod tests {
 
     /// The luma channel of every pixel, in row-major order.
     fn levels(rgba: &Rgba) -> Vec<u8> {
-        rgba.pixels.as_chunks::<4>().0.iter().map(|px| px[0]).collect()
+        rgba.pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|px| px[0])
+            .collect()
     }
 
     /// 3×2 source with distinguishable pixels:

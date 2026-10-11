@@ -1,6 +1,8 @@
+use crate::app::edit::{self, EditOp};
 use crate::app::view;
 use crate::app::{HoveredPixel, MouseMode, PhotonApp, StatusOverlay};
 use eframe::egui;
+use std::sync::Arc;
 
 /// Upper bound on the number of copies tile-repeat will draw, so a tiny image
 /// zoomed far out cannot spawn an unbounded grid of paint callbacks.
@@ -18,10 +20,7 @@ impl PhotonApp {
 
         let Some(image) = self.displayed_image.clone() else {
             if self.is_loading {
-                self.ui_status_overlay(
-                    ui.ctx(),
-                    StatusOverlay::Loading(self.loading_text()),
-                );
+                self.ui_status_overlay(ui.ctx(), StatusOverlay::Loading(self.loading_text()));
             } else {
                 self.ui_status_overlay(ui.ctx(), StatusOverlay::NoImages);
             }
@@ -30,10 +29,7 @@ impl PhotonApp {
 
         let Some((img_w, img_h)) = self.image_dimensions else {
             if self.is_loading {
-                self.ui_status_overlay(
-                    ui.ctx(),
-                    StatusOverlay::Loading(self.loading_text()),
-                );
+                self.ui_status_overlay(ui.ctx(), StatusOverlay::Loading(self.loading_text()));
             } else {
                 self.ui_status_overlay(ui.ctx(), StatusOverlay::NoImages);
             }
@@ -49,12 +45,10 @@ impl PhotonApp {
 
         if self.needs_fit {
             // Fit using the user-selected mode (default reduce-only: shrink a
-            // too-large image to the window, never upscale past 100%).
-            self.zoom = view::fit_zoom(
-                response.rect.size(),
-                texture_size,
-                self.settings.fit_mode,
-            );
+            // too-large image to the window, never upscale past 100%). A locked
+            // zoom overrides the computed fit (Roadmap §3).
+            let fit = view::fit_zoom(response.rect.size(), texture_size, self.settings.fit_mode);
+            self.zoom = self.zoom_lock.apply(fit);
             self.pan = egui::Vec2::ZERO;
             self.needs_fit = false;
         }
@@ -131,9 +125,7 @@ impl PhotonApp {
         self.hovered_pixel = response.hover_pos().and_then(|pos| {
             let (px, py) = view::image_pixel_at(pos, image_screen_rect, self.zoom, img_w, img_h)?;
             let layers = self.active_rgba.as_ref()?;
-            let rgba = layers
-                .get(self.current_layer)
-                .or_else(|| layers.last())?;
+            let rgba = layers.get(self.current_layer).or_else(|| layers.last())?;
             let idx = (py as usize * img_w as usize + px as usize) * 4;
             let sample = rgba.get(idx..idx + 4)?;
             Some(HoveredPixel {
@@ -144,10 +136,7 @@ impl PhotonApp {
         });
 
         if self.is_loading {
-            self.ui_status_overlay(
-                ui.ctx(),
-                StatusOverlay::Loading(self.loading_text()),
-            );
+            self.ui_status_overlay(ui.ctx(), StatusOverlay::Loading(self.loading_text()));
         }
 
         // Calculate scale factors for image <-> screen conversion
@@ -332,6 +321,144 @@ impl PhotonApp {
                 0.0,
                 egui::Color32::from_rgba_unmultiplied(50, 150, 255, 50),
             );
+        }
+    }
+}
+
+/// Interactive editing (Roadmap.md §4): apply a whole-image op to the displayed
+/// image, undo/redo, and re-upload. The ops themselves are pure (`edit`); this
+/// is the canvas/state glue.
+impl PhotonApp {
+    /// Drop the whole-image undo history. Called when the displayed target
+    /// changes, so an edit history never leaks onto a different file.
+    pub(crate) fn clear_edit_history(&mut self) {
+        self.edit_undo = edit::UndoStack::new();
+    }
+
+    /// Apply one edit to the displayed image and re-upload it.
+    pub(crate) fn apply_edit(&mut self, op: EditOp) {
+        let Some((pixels, width, height)) = crate::app::clipboard::current_rgba(self) else {
+            return;
+        };
+        let src = edit::Rgba::new(pixels, width, height);
+        let out = match op {
+            EditOp::RotateLeft => src.rotate270(),
+            EditOp::RotateRight => src.rotate90(),
+            EditOp::Rotate180 => src.rotate180(),
+            EditOp::FlipHorizontal => src.flip_horizontal(),
+            EditOp::FlipVertical => src.flip_vertical(),
+            EditOp::Grayscale => src.grayscale(),
+            EditOp::Negative => src.negative(),
+            EditOp::Crop => {
+                let Some(rect) = self.crop_rect_from_selection() else {
+                    return;
+                };
+                src.crop(rect)
+            }
+        };
+
+        // Seed the history with the pre-edit state so the first edit is
+        // undoable, then record the result as the new current state.
+        if self.edit_undo.is_empty() {
+            self.edit_undo.push(src.clone());
+        }
+        self.edit_undo.push(out.clone());
+        self.show_edited(out);
+    }
+
+    pub(crate) fn undo_edit(&mut self) {
+        if let Some(snapshot) = self.edit_undo.undo() {
+            self.show_edited(snapshot);
+        }
+    }
+
+    pub(crate) fn redo_edit(&mut self) {
+        if let Some(snapshot) = self.edit_undo.redo() {
+            self.show_edited(snapshot);
+        }
+    }
+
+    /// The current selection as an image-space crop rectangle, if any. Empty or
+    /// degenerate selections are rejected (a crop needs a positive extent).
+    fn crop_rect_from_selection(&self) -> Option<edit::CropRect> {
+        let sel = self.selection_image_rect?;
+        let width = sel.width().max(0.0).round() as u32;
+        let height = sel.height().max(0.0).round() as u32;
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some(edit::CropRect {
+            x: sel.min.x.max(0.0).round() as u32,
+            y: sel.min.y.max(0.0).round() as u32,
+            width,
+            height,
+        })
+    }
+
+    /// Upload an edited buffer as the displayed image.
+    ///
+    /// Built on the main thread, not the loader worker, and kept out of the LRU
+    /// cache: the cache holds unmodified disk images, so a cache-hit copy/save
+    /// always matches the pixels on screen and an edit stays transient to the
+    /// current view (it is discarded when navigating away).
+    fn show_edited(&mut self, image: edit::Rgba) {
+        let (width, height) = (image.width, image.height);
+        let built = {
+            let (Some(device), Some(queue), Some(renderer)) = (
+                self.device.as_ref(),
+                self.queue.as_deref(),
+                self.image_renderer.as_ref(),
+            ) else {
+                return;
+            };
+            let ctx = crate::render::RenderContext {
+                device,
+                queue,
+                tile_layout: &renderer.tile_layout,
+                max_dim: device.limits().max_texture_dimension_2d,
+            };
+            Arc::new(crate::render::build_render_image(
+                &ctx,
+                vec![image.pixels.clone()],
+                width,
+                height,
+                false,
+            ))
+        };
+
+        let dimensions_changed = self.image_dimensions != Some((width, height));
+        self.displayed_image = Some(built);
+        self.current_layer = 0;
+        self.layers_are_cubemap = false;
+        self.image_dimensions = Some((width, height));
+        self.is_loading = false;
+        self.error_overlay = None;
+        self.selection = None;
+        self.selection_image_rect = None;
+        self.selection_start = None;
+
+        // Editing a pasted image edits the paste buffer; editing a file image
+        // replaces the active decoded bytes so copy/save see the result.
+        if self.is_pasted {
+            self.pasted_rgba = Some(image.pixels);
+        } else {
+            self.pasted_rgba = None;
+            self.active_rgba = Some(vec![image.pixels]);
+        }
+
+        // Re-fit when the edit changed the dimensions (rotate/crop), following
+        // the same policy as navigation; a locked zoom still wins.
+        let reset = match self.settings.zoom_reset {
+            crate::app::ZoomReset::Always => true,
+            crate::app::ZoomReset::DimensionChange => dimensions_changed,
+            crate::app::ZoomReset::Never => false,
+        };
+        if reset {
+            self.zoom = self.zoom_lock.apply(1.0);
+            self.pan = egui::Vec2::ZERO;
+            if self.settings.scale_to_fit {
+                self.needs_fit = true;
+            }
         }
     }
 }

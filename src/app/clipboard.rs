@@ -167,16 +167,19 @@ impl PhotonApp {
                 let height = img.height as u32;
                 let rgba = img.bytes.to_vec();
 
-                if let Some(sender) = &self.request_sender {
+                if self.request_sender.is_some() {
                     self.is_pasted = true;
                     self.is_loading = true;
                     self.target_path = None; // Important so check_load_complete knows it's the paste
                     self.error_overlay = None;
-                    let _ = sender.send(WorkerMessage::Paste {
-                        rgba,
-                        width,
-                        height,
-                    });
+                    self.clear_edit_history();
+                    if let Some(sender) = &self.request_sender {
+                        let _ = sender.send(WorkerMessage::Paste {
+                            rgba,
+                            width,
+                            height,
+                        });
+                    }
                     ctx.request_repaint();
                 }
             }

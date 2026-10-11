@@ -46,6 +46,23 @@ impl app::PhotonApp {
                             }
                         });
                 });
+                // Lock zoom (Roadmap §3): when enabled, capture the current
+                // magnification and hold it across navigation, overriding the
+                // reset policy above.
+                let mut lock_zoom = self.settings.lock_zoom;
+                if ui
+                    .checkbox(&mut lock_zoom, "Lock zoom across navigation")
+                    .changed()
+                {
+                    // Field-level writes: the enclosing `.open(&mut self.settings_open)`
+                    // borrow forbids calling a `&mut self` method here.
+                    self.settings.lock_zoom = lock_zoom;
+                    if lock_zoom {
+                        self.zoom_lock.lock(self.zoom);
+                    } else {
+                        self.zoom_lock.unlock();
+                    }
+                }
                 // Sharp (pixel) scaling is a shader-pass feature; the
                 // toggle persists but has no effect until then.
                 ui.checkbox(

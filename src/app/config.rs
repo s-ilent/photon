@@ -38,12 +38,14 @@ pub(crate) fn parse_config(text: &str) -> AppSettings {
 
 /// Serialize settings to pretty RON.
 pub(crate) fn serialize_settings(settings: &AppSettings) -> String {
-    ron::ser::to_string_pretty(settings, ron::ser::PrettyConfig::default())
-        .unwrap_or_else(|e| {
-            log::error!("Config: failed to serialize settings ({}), writing defaults", e);
-            ron::ser::to_string_pretty(&AppSettings::default(), ron::ser::PrettyConfig::default())
-                .expect("default settings always serialize")
-        })
+    ron::ser::to_string_pretty(settings, ron::ser::PrettyConfig::default()).unwrap_or_else(|e| {
+        log::error!(
+            "Config: failed to serialize settings ({}), writing defaults",
+            e
+        );
+        ron::ser::to_string_pretty(&AppSettings::default(), ron::ser::PrettyConfig::default())
+            .expect("default settings always serialize")
+    })
 }
 
 impl PhotonApp {
@@ -78,10 +80,8 @@ impl PhotonApp {
             }
         }
         let tmp = path.with_extension("ron.tmp");
-        let write =
-            std::fs::write(&tmp, serialize_settings(&self.settings)).and_then(|()| {
-                std::fs::rename(&tmp, &path)
-            });
+        let write = std::fs::write(&tmp, serialize_settings(&self.settings))
+            .and_then(|()| std::fs::rename(&tmp, &path));
         if let Err(e) = write {
             log::error!("Failed to write config {:?}: {}", path, e);
         }
@@ -110,6 +110,7 @@ mod tests {
             tile_repeat: true,
             zoom_reset: ZoomReset::Never,
             fit_mode: FitMode::AlwaysFit,
+            lock_zoom: true,
             sort_mode: SortMode::FileSizeSmallest,
         };
 
@@ -143,7 +144,13 @@ mod tests {
 
     #[test]
     fn malformed_config_yields_defaults() {
-        assert_eq!(parse_config("this is not (valid ron"), AppSettings::default());
-        assert_eq!(parse_config("(zoom_reset: sideways)"), AppSettings::default());
+        assert_eq!(
+            parse_config("this is not (valid ron"),
+            AppSettings::default()
+        );
+        assert_eq!(
+            parse_config("(zoom_reset: sideways)"),
+            AppSettings::default()
+        );
     }
 }

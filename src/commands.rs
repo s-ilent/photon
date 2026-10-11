@@ -9,6 +9,7 @@
 //! This first step deliberately stops at routing the existing keyboard
 //! shortcuts: no params, no enable predicates, no CLI parser yet.
 
+use crate::app::edit::EditOp;
 use crate::app::PhotonApp;
 use eframe::egui;
 
@@ -19,16 +20,61 @@ pub(crate) enum Command {
     SaveImageAs,
     Copy,
     Paste,
+    OpenBatchConvert,
     CycleMouseMode,
     NextImage,
     PrevImage,
     ToggleFullscreen,
+    // Interactive edits (Roadmap.md §4).
+    RotateLeft,
+    RotateRight,
+    Rotate180,
+    FlipHorizontal,
+    FlipVertical,
+    CropToSelection,
+    Grayscale,
+    Negative,
+    UndoEdit,
+    RedoEdit,
 }
 
-// The registry's public surface (names/CLI keys) is exercised by the tests
-// here and consumed by the menu/CLI layering of Roadmap §1/§10, which lands
-// after this first dispatch step. Temporary `allow`, as with `app::view`.
-#[allow(dead_code)]
+/// Top-level menu a [`Command`] appears under. The menu bar iterates
+/// [`Command::all`] and dispatches by group, so a new command joins a menu just
+/// by returning its group here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MenuGroup {
+    File,
+    Edit,
+    View,
+}
+
+impl Command {
+    /// The menu bar group this command belongs to.
+    pub(crate) fn menu_group(&self) -> MenuGroup {
+        match self {
+            Command::Open
+            | Command::SaveImageAs
+            | Command::Copy
+            | Command::Paste
+            | Command::OpenBatchConvert => MenuGroup::File,
+            Command::RotateLeft
+            | Command::RotateRight
+            | Command::Rotate180
+            | Command::FlipHorizontal
+            | Command::FlipVertical
+            | Command::CropToSelection
+            | Command::Grayscale
+            | Command::Negative
+            | Command::UndoEdit
+            | Command::RedoEdit => MenuGroup::Edit,
+            Command::CycleMouseMode
+            | Command::NextImage
+            | Command::PrevImage
+            | Command::ToggleFullscreen => MenuGroup::View,
+        }
+    }
+}
+
 impl Command {
     /// All commands, in presentation order. The binding table, and any future
     /// menu or CLI listing, iterate this rather than hardcoding commands.
@@ -38,10 +84,21 @@ impl Command {
             Command::SaveImageAs,
             Command::Copy,
             Command::Paste,
+            Command::OpenBatchConvert,
             Command::CycleMouseMode,
             Command::NextImage,
             Command::PrevImage,
             Command::ToggleFullscreen,
+            Command::RotateLeft,
+            Command::RotateRight,
+            Command::Rotate180,
+            Command::FlipHorizontal,
+            Command::FlipVertical,
+            Command::CropToSelection,
+            Command::Grayscale,
+            Command::Negative,
+            Command::UndoEdit,
+            Command::RedoEdit,
         ]
     }
 
@@ -52,26 +109,50 @@ impl Command {
             Command::SaveImageAs => "Save As…",
             Command::Copy => "Copy",
             Command::Paste => "Paste",
+            Command::OpenBatchConvert => "Convert…",
             Command::CycleMouseMode => "Cycle Mouse Mode",
             Command::NextImage => "Next Image",
             Command::PrevImage => "Previous Image",
             Command::ToggleFullscreen => "Toggle Fullscreen",
+            Command::RotateLeft => "Rotate Left",
+            Command::RotateRight => "Rotate Right",
+            Command::Rotate180 => "Rotate 180°",
+            Command::FlipHorizontal => "Flip Horizontal",
+            Command::FlipVertical => "Flip Vertical",
+            Command::CropToSelection => "Crop to Selection",
+            Command::Grayscale => "Grayscale",
+            Command::Negative => "Negative",
+            Command::UndoEdit => "Undo Edit",
+            Command::RedoEdit => "Redo Edit",
         }
     }
 
     /// The switch that names this command in the scripting language
     /// (Roadmap §10). Stable, lowercase, hyphenated — the seed of the CLI
-    /// grammar, so these must not churn.
+    /// grammar, so these must not churn. Reserved for the CLI/rebinding work;
+    /// the tests here cover its invariants until that lands.
+    #[allow(dead_code)]
     pub(crate) fn cli_name(&self) -> &'static str {
         match self {
             Command::Open => "open",
             Command::SaveImageAs => "save-as",
             Command::Copy => "copy",
             Command::Paste => "paste",
+            Command::OpenBatchConvert => "convert",
             Command::CycleMouseMode => "mouse-mode",
             Command::NextImage => "next",
             Command::PrevImage => "prev",
             Command::ToggleFullscreen => "fullscreen",
+            Command::RotateLeft => "rotate-left",
+            Command::RotateRight => "rotate-right",
+            Command::Rotate180 => "rotate-180",
+            Command::FlipHorizontal => "flip-horizontal",
+            Command::FlipVertical => "flip-vertical",
+            Command::CropToSelection => "crop",
+            Command::Grayscale => "grayscale",
+            Command::Negative => "negative",
+            Command::UndoEdit => "undo",
+            Command::RedoEdit => "redo",
         }
     }
 }
@@ -88,7 +169,7 @@ impl Command {
 pub(crate) fn default_bindings() -> &'static [(Command, Option<egui::KeyboardShortcut>)] {
     use egui::{Key, KeyboardShortcut, Modifiers};
 
-    static BINDINGS: [(Command, Option<KeyboardShortcut>); 11] = [
+    static BINDINGS: [(Command, Option<KeyboardShortcut>); 22] = [
         (
             Command::Open,
             Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::O)),
@@ -134,6 +215,28 @@ pub(crate) fn default_bindings() -> &'static [(Command, Option<egui::KeyboardSho
             Command::ToggleFullscreen,
             Some(KeyboardShortcut::new(Modifiers::NONE, Key::F11)),
         ),
+        (
+            Command::UndoEdit,
+            Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)),
+        ),
+        (
+            Command::RedoEdit,
+            Some(KeyboardShortcut::new(
+                Modifiers::COMMAND.plus(Modifiers::SHIFT),
+                Key::Z,
+            )),
+        ),
+        // Menu-only edits carry a `None` row so the "every command has a row"
+        // invariant holds without binding a key.
+        (Command::OpenBatchConvert, None),
+        (Command::RotateLeft, None),
+        (Command::RotateRight, None),
+        (Command::Rotate180, None),
+        (Command::FlipHorizontal, None),
+        (Command::FlipVertical, None),
+        (Command::CropToSelection, None),
+        (Command::Grayscale, None),
+        (Command::Negative, None),
     ];
 
     &BINDINGS
@@ -165,6 +268,38 @@ impl PhotonApp {
                 let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
             }
+            Command::OpenBatchConvert => self.batch.open = true,
+            Command::RotateLeft => self.apply_edit(EditOp::RotateLeft),
+            Command::RotateRight => self.apply_edit(EditOp::RotateRight),
+            Command::Rotate180 => self.apply_edit(EditOp::Rotate180),
+            Command::FlipHorizontal => self.apply_edit(EditOp::FlipHorizontal),
+            Command::FlipVertical => self.apply_edit(EditOp::FlipVertical),
+            Command::CropToSelection => self.apply_edit(EditOp::Crop),
+            Command::Grayscale => self.apply_edit(EditOp::Grayscale),
+            Command::Negative => self.apply_edit(EditOp::Negative),
+            Command::UndoEdit => self.undo_edit(),
+            Command::RedoEdit => self.redo_edit(),
+        }
+    }
+
+    /// Whether `command` can run right now — the menu-bar enable state. A
+    /// missing image (or an error overlay) disables the ops that need pixels;
+    /// undo/redo and crop track their own preconditions.
+    pub(crate) fn command_enabled(&self, command: Command) -> bool {
+        let has_image = self.displayed_image.is_some() && self.error_overlay.is_none();
+        match command {
+            Command::UndoEdit => self.edit_undo.can_undo(),
+            Command::RedoEdit => self.edit_undo.can_redo(),
+            Command::CropToSelection => has_image && self.selection_image_rect.is_some(),
+            Command::SaveImageAs
+            | Command::RotateLeft
+            | Command::RotateRight
+            | Command::Rotate180
+            | Command::FlipHorizontal
+            | Command::FlipVertical
+            | Command::Grayscale
+            | Command::Negative => has_image,
+            _ => true,
         }
     }
 }
@@ -227,5 +362,37 @@ mod tests {
                 assert!(seen.insert(*shortcut), "duplicate key binding {shortcut:?}");
             }
         }
+    }
+
+    #[test]
+    fn undo_redo_and_crop_disabled_without_preconditions() {
+        let app = PhotonApp::new();
+        assert!(!app.command_enabled(Command::UndoEdit));
+        assert!(!app.command_enabled(Command::RedoEdit));
+        assert!(!app.command_enabled(Command::CropToSelection));
+    }
+
+    #[test]
+    fn pixel_edits_disabled_without_an_image() {
+        let app = PhotonApp::new();
+        for command in [
+            Command::RotateLeft,
+            Command::RotateRight,
+            Command::Rotate180,
+            Command::FlipHorizontal,
+            Command::FlipVertical,
+            Command::Grayscale,
+            Command::Negative,
+            Command::SaveImageAs,
+        ] {
+            assert!(
+                !app.command_enabled(command),
+                "{command:?} should be disabled"
+            );
+        }
+        // Commands that do not need a loaded image stay enabled.
+        assert!(app.command_enabled(Command::Open));
+        assert!(app.command_enabled(Command::Paste));
+        assert!(app.command_enabled(Command::OpenBatchConvert));
     }
 }

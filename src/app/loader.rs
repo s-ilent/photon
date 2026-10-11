@@ -1,6 +1,5 @@
 use crate::app::{
-    LoadRequest, LoadResult, PhotonApp, Priority, SortMode, StatusOverlay, WorkerMessage,
-    ZoomReset,
+    LoadRequest, LoadResult, PhotonApp, Priority, SortMode, StatusOverlay, WorkerMessage, ZoomReset,
 };
 use crate::dir_walker;
 use eframe::egui;
@@ -18,8 +17,10 @@ impl PhotonApp {
 
         let device = self.device.clone().expect("wgpu device not initialized");
         let queue = self.queue.clone().expect("wgpu queue not initialized");
-        let renderer =
-            self.image_renderer.clone().expect("image renderer not initialized");
+        let renderer = self
+            .image_renderer
+            .clone()
+            .expect("image renderer not initialized");
         let tile_layout = renderer.tile_layout.clone();
 
         let (req_tx, req_rx) = mpsc::channel::<WorkerMessage>();
@@ -183,11 +184,7 @@ impl PhotonApp {
                         "Worker loaded: {:?} | {} layer(s), {} tile(s) | Total: {:?}",
                         path.file_name(),
                         image.layers.len(),
-                        image
-                            .layers
-                            .iter()
-                            .map(|l| l.tiles.len())
-                            .sum::<usize>(),
+                        image.layers.iter().map(|l| l.tiles.len()).sum::<usize>(),
                         start_total.elapsed()
                     );
                 } else {
@@ -236,9 +233,11 @@ impl PhotonApp {
         let path = self.images[self.current_index].clone();
 
         // Drop the previous image's decoded bytes when the target changes;
-        // refreshed when the new target's Active load completes.
+        // refreshed when the new target's Active load completes. Its edit
+        // history goes with it.
         if self.target_path.as_ref() != Some(&path) {
             self.active_rgba = None;
+            self.clear_edit_history();
         }
 
         // 1. Check if already in cache and fully loaded
@@ -266,7 +265,8 @@ impl PhotonApp {
                 ZoomReset::Never => false,
             };
             if reset {
-                self.zoom = 1.0;
+                // Locked magnification overrides the reset (Roadmap §3).
+                self.zoom = self.zoom_lock.apply(1.0);
                 self.pan = egui::Vec2::ZERO;
                 self.selection = None;
                 self.selection_image_rect = None;
@@ -333,8 +333,7 @@ impl PhotonApp {
 
                         if is_active {
                             let (width, height) = image.dims();
-                            let dimensions_changed =
-                                self.image_dimensions != Some((width, height));
+                            let dimensions_changed = self.image_dimensions != Some((width, height));
                             let is_cubemap = image.is_cubemap;
                             self.displayed_image = Some(image);
                             self.current_layer = 0;
@@ -465,9 +464,10 @@ impl PhotonApp {
                     return;
                 }
             };
-            if let Err(e) = debouncer
-                .watch(&watch_dir, notify_debouncer_full::notify::RecursiveMode::NonRecursive)
-            {
+            if let Err(e) = debouncer.watch(
+                &watch_dir,
+                notify_debouncer_full::notify::RecursiveMode::NonRecursive,
+            ) {
                 log::warn!("Failed to watch {:?}: {}", watch_dir, e);
                 return;
             }
@@ -597,7 +597,8 @@ impl PhotonApp {
         }
     }
 
-    pub(crate) fn sort_images(&mut self, mode: SortMode) {        if self.images.is_empty() {
+    pub(crate) fn sort_images(&mut self, mode: SortMode) {
+        if self.images.is_empty() {
             return;
         }
 
@@ -748,8 +749,6 @@ mod tests {
         app.request_current();
         assert_eq!(app.zoom, 1.0);
     }
-
-
 
     #[test]
     fn dir_refresh_preserves_place_without_reload() {

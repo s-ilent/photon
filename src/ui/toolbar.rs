@@ -1,8 +1,50 @@
 use crate::app;
+use crate::commands::{Command, MenuGroup};
 use eframe::egui;
 use egui_phosphor::regular as icons;
 
 impl app::PhotonApp {
+    /// Top menu bar (File / Edit / View). Driven by the command registry: the
+    /// items and their enable state come from [`Command::all`], so a new command
+    /// joins a menu just by declaring its [`MenuGroup`] (Roadmap §1).
+    pub(crate) fn ui_menu_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            for (title, group) in [
+                ("File", MenuGroup::File),
+                ("Edit", MenuGroup::Edit),
+                ("View", MenuGroup::View),
+            ] {
+                ui.menu_button(title, |ui| {
+                    for &command in Command::all() {
+                        if command.menu_group() != group {
+                            continue;
+                        }
+                        if ui
+                            .add_enabled(
+                                self.command_enabled(command),
+                                egui::Button::new(command.label()),
+                            )
+                            .clicked()
+                        {
+                            ui.close();
+                            self.run_command(command, ctx);
+                        }
+                    }
+                    // Lock-zoom is runtime state, not a registry command, so it
+                    // is appended to the View menu directly.
+                    if group == MenuGroup::View {
+                        ui.separator();
+                        let locked = self.zoom_lock.is_locked();
+                        if ui.selectable_label(locked, "Lock Zoom").clicked() {
+                            ui.close();
+                            self.set_zoom_lock(!locked);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     pub(crate) fn ui_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // Drain any finished background batch run every frame, regardless of
         // whether the Batch Convert window is currently open.
@@ -20,10 +62,7 @@ impl app::PhotonApp {
 
             // Left-aligned elements fill the remaining space on the left (left-to-right)
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                if ui
-                    .button(format!("{} Open", icons::FOLDER_OPEN))
-                    .clicked()
-                {
+                if ui.button(format!("{} Open", icons::FOLDER_OPEN)).clicked() {
                     self.open_file();
                 }
                 ui.separator();
@@ -45,12 +84,8 @@ impl app::PhotonApp {
                 }
                 if ui
                     .add_enabled(
-                        self.mode == app::MouseMode::Select
-                            && self.selection_image_rect.is_some(),
-                        egui::Button::new(format!(
-                            "{} Save Selection As\u{2026}",
-                            icons::SCISSORS
-                        )),
+                        self.mode == app::MouseMode::Select && self.selection_image_rect.is_some(),
+                        egui::Button::new(format!("{} Save Selection As\u{2026}", icons::SCISSORS)),
                     )
                     .clicked()
                 {
@@ -69,16 +104,10 @@ impl app::PhotonApp {
                     }
                 }
                 ui.separator();
-                if ui
-                    .button(format!("{} Prev", icons::CARET_LEFT))
-                    .clicked()
-                {
+                if ui.button(format!("{} Prev", icons::CARET_LEFT)).clicked() {
                     self.prev_image();
                 }
-                if ui
-                    .button(format!("{} Next", icons::CARET_RIGHT))
-                    .clicked()
-                {
+                if ui.button(format!("{} Next", icons::CARET_RIGHT)).clicked() {
                     self.next_image();
                 }
                 ui.separator();
@@ -89,11 +118,7 @@ impl app::PhotonApp {
                 {
                     self.needs_fit = true;
                 }
-                if ui
-                    .button("100%")
-                    .on_hover_text("Actual size")
-                    .clicked()
-                {
+                if ui.button("100%").on_hover_text("Actual size").clicked() {
                     self.zoom = 1.0;
                     self.pan = egui::Vec2::ZERO;
                 }

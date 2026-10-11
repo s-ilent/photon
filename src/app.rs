@@ -21,18 +21,15 @@ mod loader;
 mod saver;
 // Batch conversion engine (Roadmap.md §5) — driven by the Batch Convert window.
 pub(crate) mod batch;
-// Interactive editing ops + undo (Roadmap.md §4) — landing next.
-#[allow(dead_code)]
-mod edit;
+// Interactive editing ops + undo (Roadmap.md §4) — applied from the canvas,
+// which re-uploads the result on the main thread.
+pub(crate) mod edit;
 pub(crate) mod settings;
 mod theme;
-// Fit/zoom geometry (Roadmap.md §3). `fit_zoom`/`zoom_limits` are wired into
-// the canvas, `zoom_percent_label` into the info bar, `image_pixel_at`/
-// `html_hex` into the cursor pixel readout, `tile_offsets` into the
-// tile-repeat view, and `FitMode` is user-selectable (Settings + Fit/100%
-// toolbar buttons). Only `ZoomLock` (lock-zoom-across-navigation) still awaits
-// wiring, hence the temporary `allow`.
-#[allow(dead_code)]
+// Fit/zoom geometry (Roadmap.md §3): `fit_zoom`/`zoom_limits`/`ZoomLock` are
+// wired into the canvas, `zoom_percent_label` into the info bar,
+// `image_pixel_at`/`html_hex` into the cursor pixel readout, `tile_offsets`
+// into the tile-repeat view, and `FitMode` is user-selectable.
 pub(crate) mod view;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -272,6 +269,13 @@ pub struct PhotonApp {
     pub(crate) hovered_pixel: Option<HoveredPixel>,
     /// Batch Convert window state (Roadmap.md §5).
     pub(crate) batch: BatchState,
+    /// Whole-image undo/redo history for interactive edits (Roadmap.md §4).
+    /// Reset whenever the displayed target changes, so an edit history never
+    /// leaks onto a different file.
+    pub(crate) edit_undo: edit::UndoStack,
+    /// Holds the current magnification across navigation (Roadmap.md §3).
+    /// Gated by `settings.lock_zoom`; capturing the zoom is an explicit action.
+    pub(crate) zoom_lock: view::ZoomLock,
 }
 
 impl PhotonApp {
@@ -321,6 +325,8 @@ impl PhotonApp {
             error_overlay: None,
             hovered_pixel: None,
             batch: BatchState::default(),
+            edit_undo: edit::UndoStack::new(),
+            zoom_lock: view::ZoomLock::new(),
         }
     }
 
@@ -329,6 +335,18 @@ impl PhotonApp {
         // Clear selection when switching modes
         self.selection = None;
         self.selection_start = None;
+    }
+
+    /// Enable or disable lock-zoom (Roadmap §3). Enabling captures the current
+    /// magnification; disabling releases it. Shared by the Settings checkbox and
+    /// the View menu so both stay in sync.
+    pub(crate) fn set_zoom_lock(&mut self, locked: bool) {
+        self.settings.lock_zoom = locked;
+        if locked {
+            self.zoom_lock.lock(self.zoom);
+        } else {
+            self.zoom_lock.unlock();
+        }
     }
 
     /// Display layer `index` of the loaded image (cubemap face / array entry).

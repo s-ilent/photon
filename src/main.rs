@@ -71,6 +71,9 @@ impl eframe::App for app::PhotonApp {
         // Persist settings when they changed this frame
         self.save_config_if_changed();
 
+        // 1. Top Menu Bar (registry-driven)
+        egui::Panel::top("menubar").show_inside(ui, |ui| self.ui_menu_bar(ui, &ctx));
+
         // 1. Top Toolbar (App State & Settings)
         egui::Panel::top("toolbar").show_inside(ui, |ui| self.ui_toolbar(ui, &ctx));
 
