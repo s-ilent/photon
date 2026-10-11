@@ -248,6 +248,7 @@ impl PhotonApp {
             let (w, h) = cached.dims();
             let dimensions_changed = self.image_dimensions != Some((w, h));
             self.displayed_image = Some(cached);
+            self.pending_window_fit = true;
             self.current_layer = 0;
             self.layers_are_cubemap = self
                 .displayed_image
@@ -336,6 +337,7 @@ impl PhotonApp {
                             let dimensions_changed = self.image_dimensions != Some((width, height));
                             let is_cubemap = image.is_cubemap;
                             self.displayed_image = Some(image);
+                            self.pending_window_fit = true;
                             self.current_layer = 0;
                             self.layers_are_cubemap = is_cubemap;
                             self.image_dimensions = Some((width, height));

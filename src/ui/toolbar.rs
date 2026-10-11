@@ -30,14 +30,40 @@ impl app::PhotonApp {
                             self.run_command(command, ctx);
                         }
                     }
-                    // Lock-zoom is runtime state, not a registry command, so it
-                    // is appended to the View menu directly.
+                    // Lock-zoom and the window-fit/zoom actions are runtime
+                    // state, not registry commands, so they are appended to the
+                    // View menu directly.
                     if group == MenuGroup::View {
                         ui.separator();
                         let locked = self.zoom_lock.is_locked();
                         if ui.selectable_label(locked, "Lock Zoom").clicked() {
                             ui.close();
                             self.set_zoom_lock(!locked);
+                        }
+                        ui.separator();
+                        let has_image = self.image_dimensions.is_some();
+                        let can_window_fit =
+                            has_image && self.settings.fit_window != app::view::FitWindow::DontFit;
+                        if ui
+                            .add_enabled(can_window_fit, egui::Button::new("Fit Window to Image"))
+                            .clicked()
+                        {
+                            ui.close();
+                            self.fit_window_to_image(ctx);
+                        }
+                        if ui
+                            .add_enabled(has_image, egui::Button::new("Centre Window"))
+                            .clicked()
+                        {
+                            ui.close();
+                            self.center_window(ctx);
+                        }
+                        if ui
+                            .add_enabled(has_image, egui::Button::new("Zoom to Desktop"))
+                            .clicked()
+                        {
+                            ui.close();
+                            self.zoom_to_desktop(ctx);
                         }
                     }
                 });

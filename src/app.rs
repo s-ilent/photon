@@ -276,6 +276,9 @@ pub struct PhotonApp {
     /// Holds the current magnification across navigation (Roadmap.md §3).
     /// Gated by `settings.lock_zoom`; capturing the zoom is an explicit action.
     pub(crate) zoom_lock: view::ZoomLock,
+    /// Set when a new image is displayed; the canvas consumes it to resize the
+    /// OS window to the image per `settings.fit_window` (Roadmap.md §3).
+    pub(crate) pending_window_fit: bool,
 }
 
 impl PhotonApp {
@@ -327,6 +330,7 @@ impl PhotonApp {
             batch: BatchState::default(),
             edit_undo: edit::UndoStack::new(),
             zoom_lock: view::ZoomLock::new(),
+            pending_window_fit: false,
         }
     }
 

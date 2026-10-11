@@ -63,6 +63,9 @@ pub struct AppSettings {
     pub zoom_reset: ZoomReset,
     /// How an image is fitted to the window on load / re-fit; see `FitMode`.
     pub fit_mode: crate::app::view::FitMode,
+    /// How the OS window is resized to the image on load (Roadmap §3); see
+    /// `FitWindow`. Explicit View-menu actions apply it too.
+    pub fit_window: crate::app::view::FitWindow,
     /// Hold the current magnification across navigation (Roadmap §3). When on,
     /// switching images keeps the locked zoom and recentres instead of applying
     /// the `zoom_reset` policy.
@@ -81,6 +84,7 @@ impl Default for AppSettings {
             tile_repeat: false,
             zoom_reset: ZoomReset::default(),
             fit_mode: crate::app::view::FitMode::ReduceOnly,
+            fit_window: crate::app::view::FitWindow::DontFit,
             lock_zoom: false,
             sort_mode: SortMode::default(),
         }

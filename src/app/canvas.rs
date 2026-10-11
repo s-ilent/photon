@@ -43,6 +43,12 @@ impl PhotonApp {
         // Handle auto-fit logic before calculating screen rect
         let texture_size = egui::vec2(img_w as f32, img_h as f32);
 
+        // A freshly displayed image resizes the OS window to it per the
+        // configured fit-window mode (Roadmap §3); consumes the load trigger.
+        if std::mem::take(&mut self.pending_window_fit) {
+            self.fit_window_to_image(ui.ctx());
+        }
+
         if self.needs_fit {
             // Fit using the user-selected mode (default reduce-only: shrink a
             // too-large image to the window, never upscale past 100%). A locked
@@ -461,4 +467,58 @@ impl PhotonApp {
             }
         }
     }
+}
+
+/// Fit-window / zoom-to-desktop actions (Roadmap §3).
+impl PhotonApp {
+    /// Resize the OS window to the displayed image per `settings.fit_window`,
+    /// then recentre it. No-op when the mode is `DontFit` or nothing is loaded.
+    pub(crate) fn fit_window_to_image(&mut self, ctx: &egui::Context) {
+        if self.settings.fit_window == view::FitWindow::DontFit {
+            return;
+        }
+        let Some((width, height)) = self.image_dimensions else {
+            return;
+        };
+        let window = ctx.viewport_rect().size();
+        let monitor = monitor_size(ctx, window);
+        let image = egui::vec2(width as f32, height as f32);
+        let target = view::fit_window_size(image, window, monitor, self.settings.fit_window);
+        // Only touch the window if the size actually changed (avoids churn on
+        // every navigation when the window already matches).
+        if (target.x - window.x).abs() >= 1.0 || (target.y - window.y).abs() >= 1.0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(target));
+            self.center_window(ctx);
+        }
+    }
+
+    /// Move the OS window to the centre of the monitor.
+    ///
+    /// Assumes the monitor's origin is the desktop origin (true on a single
+    /// monitor; a window on a secondary monitor is recentred on the primary).
+    /// Wayland ignores client window positioning, so this is a no-op there.
+    pub(crate) fn center_window(&self, ctx: &egui::Context) {
+        let window = ctx.viewport_rect().size();
+        let monitor = monitor_size(ctx, window);
+        let pos = view::centered_window_pos(window, monitor);
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+            pos.x, pos.y,
+        )));
+    }
+
+    /// Zoom so the image fits the monitor, never past 1:1 (Roadmap §3).
+    pub(crate) fn zoom_to_desktop(&mut self, ctx: &egui::Context) {
+        let Some((width, height)) = self.image_dimensions else {
+            return;
+        };
+        let monitor = monitor_size(ctx, ctx.viewport_rect().size());
+        self.zoom = view::zoom_to_desktop(egui::vec2(width as f32, height as f32), monitor);
+        self.pan = egui::Vec2::ZERO;
+    }
+}
+
+/// The current monitor's size in points, falling back to the window size on
+/// backends that do not report it.
+fn monitor_size(ctx: &egui::Context, fallback: egui::Vec2) -> egui::Vec2 {
+    ctx.input(|i| i.viewport().monitor_size).unwrap_or(fallback)
 }

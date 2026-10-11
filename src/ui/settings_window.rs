@@ -46,6 +46,24 @@ impl app::PhotonApp {
                             }
                         });
                 });
+                ui.horizontal(|ui| {
+                    ui.label("Resize window to image:");
+                    egui::ComboBox::from_id_salt("fit_window")
+                        .selected_text(self.settings.fit_window.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                app::view::FitWindow::DontFit,
+                                app::view::FitWindow::EnlargeIfSmaller,
+                                app::view::FitWindow::AlwaysResize,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.settings.fit_window,
+                                    mode,
+                                    mode.label(),
+                                );
+                            }
+                        });
+                });
                 // Lock zoom (Roadmap §3): when enabled, capture the current
                 // magnification and hold it across navigation, overriding the
                 // reset policy above.
