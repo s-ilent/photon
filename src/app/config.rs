@@ -107,6 +107,7 @@ mod tests {
             scale_to_fit: false,
             use_sharp_scaling: true,
             checkerboard_bg: false,
+            tile_repeat: true,
             zoom_reset: ZoomReset::Never,
             fit_mode: FitMode::AlwaysFit,
             sort_mode: SortMode::FileSizeSmallest,

@@ -25,10 +25,11 @@ mod batch;
 pub(crate) mod settings;
 mod theme;
 // Fit/zoom geometry (Roadmap.md §3). `fit_zoom`/`zoom_limits` are wired into
-// the canvas, `zoom_percent_label` into the info bar, and `FitMode` is now
-// user-selectable (Settings + Fit/100% toolbar buttons). Only `ZoomLock`
-// (lock-zoom-across-navigation) still awaits wiring, hence the temporary
-// `allow`.
+// the canvas, `zoom_percent_label` into the info bar, `image_pixel_at`/
+// `html_hex` into the cursor pixel readout, `tile_offsets` into the
+// tile-repeat view, and `FitMode` is user-selectable (Settings + Fit/100%
+// toolbar buttons). Only `ZoomLock` (lock-zoom-across-navigation) still awaits
+// wiring, hence the temporary `allow`.
 #[allow(dead_code)]
 pub(crate) mod view;
 
@@ -87,6 +88,15 @@ pub enum StatusOverlay {
 pub struct SaveStatus {
     pub(crate) message: String,
     pub(crate) expires: Instant,
+}
+
+/// Image pixel under the cursor, sampled each frame for the status-bar
+/// readout (`R,G,B  A  #RRGGBB`, click to copy the hex).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HoveredPixel {
+    pub x: u32,
+    pub y: u32,
+    pub rgba: [u8; 4],
 }
 
 /// Labels for cubemap faces in DirectX file order (+X, -X, +Y, -Y, +Z, -Z).
@@ -188,6 +198,10 @@ pub struct PhotonApp {
     /// `check_load_complete` when a `LoadResult::Failed` for the active
     /// target arrives; cleared by navigation / paste / dir load.
     pub(crate) error_overlay: Option<StatusOverlay>,
+    /// Pixel under the cursor in the image canvas, for the status-bar readout.
+    /// `None` when the pointer is away from the image or no decoded bytes are
+    /// available to sample (e.g. a cache-hit load).
+    pub(crate) hovered_pixel: Option<HoveredPixel>,
 }
 
 impl PhotonApp {
@@ -235,6 +249,7 @@ impl PhotonApp {
             save_status: None,
             saved_settings: None,
             error_overlay: None,
+            hovered_pixel: None,
         }
     }
 

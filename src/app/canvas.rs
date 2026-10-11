@@ -1,6 +1,10 @@
 use crate::app::view;
-use crate::app::{MouseMode, PhotonApp, StatusOverlay};
+use crate::app::{HoveredPixel, MouseMode, PhotonApp, StatusOverlay};
 use eframe::egui;
+
+/// Upper bound on the number of copies tile-repeat will draw, so a tiny image
+/// zoomed far out cannot spawn an unbounded grid of paint callbacks.
+const MAX_TILE_COPIES: usize = 256;
 
 impl PhotonApp {
     pub(crate) fn draw_image_workspace(&mut self, ui: &mut egui::Ui) {
@@ -102,17 +106,43 @@ impl PhotonApp {
         // Sharp sampling only while magnifying: nearest-neighbor minification
         // just drops pixels (aliasing), which reads as a rendering bug.
         let sharp = self.settings.use_sharp_scaling && self.zoom >= 1.0;
-        let callback = crate::render::DrawImageCallback::new(
-            image,
-            self.current_layer,
-            sharp,
-            tint,
-            image_screen_rect,
-        );
-        painter.add(egui_wgpu::Callback::new_paint_callback(
-            image_screen_rect,
-            callback,
-        ));
+        // Tile-repeat ("seamless texture") view: draw the image once at the
+        // centre rect plus any neighbouring copies needed to cover the canvas.
+        // A canvas-drawing concern only — the shader pass is untouched.
+        let tile_offsets = if self.settings.tile_repeat {
+            view::tile_offsets(response.rect, image_screen_rect, MAX_TILE_COPIES)
+        } else {
+            vec![egui::Vec2::ZERO]
+        };
+        for offset in tile_offsets {
+            let rect = image_screen_rect.translate(offset);
+            let callback = crate::render::DrawImageCallback::new(
+                image.clone(),
+                self.current_layer,
+                sharp,
+                tint,
+                rect,
+            );
+            painter.add(egui_wgpu::Callback::new_paint_callback(rect, callback));
+        }
+
+        // Status-bar pixel readout: sample the decoded bytes under the cursor.
+        // `active_rgba` is only set by an `Active` worker load, so a cache-hit
+        // load has no sample — the readout simply stays hidden.
+        self.hovered_pixel = response.hover_pos().and_then(|pos| {
+            let (px, py) = view::image_pixel_at(pos, image_screen_rect, self.zoom, img_w, img_h)?;
+            let layers = self.active_rgba.as_ref()?;
+            let rgba = layers
+                .get(self.current_layer)
+                .or_else(|| layers.last())?;
+            let idx = (py as usize * img_w as usize + px as usize) * 4;
+            let sample = rgba.get(idx..idx + 4)?;
+            Some(HoveredPixel {
+                x: px,
+                y: py,
+                rgba: [sample[0], sample[1], sample[2], sample[3]],
+            })
+        });
 
         if self.is_loading {
             self.ui_status_overlay(

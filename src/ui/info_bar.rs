@@ -31,6 +31,21 @@ impl app::PhotonApp {
                 }
             }
 
+            // Cursor pixel readout: R,G,B  A  #RRGGBB, click to copy the hex.
+            if let Some(px) = self.hovered_pixel {
+                ui.separator();
+                let hex = app::view::html_hex(px.rgba);
+                let text = format!(
+                    "{},{},{}  {}  {}",
+                    px.rgba[0], px.rgba[1], px.rgba[2], px.rgba[3], hex
+                );
+                let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                if response.clicked() {
+                    ui.ctx().copy_text(hex.clone());
+                }
+                response.on_hover_text(format!("({}, {})  click to copy {hex}", px.x, px.y));
+            }
+
             if self.mode == app::MouseMode::Select {
                 if let Some(sel) = &self.selection_image_rect {
                     ui.separator();

@@ -56,6 +56,10 @@ impl app::PhotonApp {
                     &mut self.settings.checkerboard_bg,
                     "Checkerboard background",
                 );
+                ui.checkbox(
+                    &mut self.settings.tile_repeat,
+                    "Tile-repeat (seamless texture) view",
+                );
 
                 ui.separator();
                 ui.label("Font Size");
