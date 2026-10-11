@@ -108,8 +108,7 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, DecodeError> {
         return load_dds(path);
     }
 
-    let file = std::fs::File::open(path)
-        .map_err(|e| DecodeError::FileNotFound(e.to_string()))?;
+    let file = std::fs::File::open(path).map_err(|e| DecodeError::FileNotFound(e.to_string()))?;
     let reader = std::io::BufReader::new(file);
 
     let img_reader = ::image::ImageReader::new(reader)
@@ -148,8 +147,7 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, DecodeError> {
 /// stacked vertically inside the file by `image_dds`, so we split the stack
 /// back into per-face buffers here.
 fn load_dds(path: &Path) -> Result<DecodedImage, DecodeError> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| DecodeError::FileNotFound(e.to_string()))?;
+    let file = std::fs::File::open(path).map_err(|e| DecodeError::FileNotFound(e.to_string()))?;
     let dds = image_dds::ddsfile::Dds::read(file)
         .map_err(|e| DecodeError::InvalidData(format!("Failed to read DDS header: {}", e)))?;
 
@@ -184,7 +182,9 @@ fn load_dds(path: &Path) -> Result<DecodedImage, DecodeError> {
 
 /// True for legacy (`caps2`) and DXGI (`misc_flag`) cubemaps.
 fn dds_is_cubemap(dds: &image_dds::ddsfile::Dds) -> bool {
-    dds.header.caps2.contains(image_dds::ddsfile::Caps2::CUBEMAP)
+    dds.header
+        .caps2
+        .contains(image_dds::ddsfile::Caps2::CUBEMAP)
         || dds
             .header10
             .as_ref()
@@ -264,8 +264,7 @@ mod tests {
             format: image_dds::ddsfile::D3DFormat::A8B8G8R8,
             mipmap_levels: Some(1),
             caps2: Some(
-                image_dds::ddsfile::Caps2::CUBEMAP
-                    | image_dds::ddsfile::Caps2::CUBEMAP_ALLFACES,
+                image_dds::ddsfile::Caps2::CUBEMAP | image_dds::ddsfile::Caps2::CUBEMAP_ALLFACES,
             ),
         })
         .expect("build dds");
@@ -325,7 +324,10 @@ mod tests {
             Err(e) => e,
         };
         assert!(matches!(err, DecodeError::FileNotFound(_)));
-        assert!(!err.is_unsupported_format(), "open failure is not a format error");
+        assert!(
+            !err.is_unsupported_format(),
+            "open failure is not a format error"
+        );
         assert!(err.to_string().starts_with("Failed to open file:"));
     }
 
@@ -342,7 +344,10 @@ mod tests {
             Err(e) => e,
         };
         assert!(matches!(err, DecodeError::InvalidData(_)));
-        assert!(err.is_unsupported_format(), "decode failure is a format error");
+        assert!(
+            err.is_unsupported_format(),
+            "decode failure is a format error"
+        );
     }
 
     /// Encode a small RGBA8 PNG in memory, optionally tagged with a raw Exif
@@ -422,7 +427,10 @@ mod tests {
         let decoded = load_image(&path).expect("load_image ok");
         assert_eq!((decoded.width, decoded.height), (w, h));
         assert_eq!(decoded.layers.len(), 1);
-        assert_eq!(decoded.layers[0], pixels, "no-Exif pixels must be untouched");
+        assert_eq!(
+            decoded.layers[0], pixels,
+            "no-Exif pixels must be untouched"
+        );
         assert!(!decoded.is_cubemap);
     }
 
@@ -452,7 +460,10 @@ mod tests {
         let mut want: Vec<[u8; 4]> = pixels.chunks(4).map(|p| [p[0], p[1], p[2], p[3]]).collect();
         got.sort_unstable();
         want.sort_unstable();
-        assert_eq!(got, want, "rotation must preserve pixel data as a permutation");
+        assert_eq!(
+            got, want,
+            "rotation must preserve pixel data as a permutation"
+        );
     }
 
     /// The variant -> classification mapping for the whole vocabulary.

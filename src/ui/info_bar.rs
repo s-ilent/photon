@@ -60,7 +60,11 @@ impl app::PhotonApp {
                 .map_or(0, |image| image.layers.len());
             if layer_count > 1 {
                 ui.separator();
-                ui.label(if self.layers_are_cubemap { "Face:" } else { "Layer:" });
+                ui.label(if self.layers_are_cubemap {
+                    "Face:"
+                } else {
+                    "Layer:"
+                });
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for i in 0..layer_count {

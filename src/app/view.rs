@@ -341,9 +341,15 @@ mod tests {
     #[test]
     fn dont_fit_is_always_100_percent() {
         // Smaller-than-window image.
-        assert_eq!(fit_zoom(v(100.0, 100.0), v(50.0, 50.0), FitMode::DontFit), 1.0);
+        assert_eq!(
+            fit_zoom(v(100.0, 100.0), v(50.0, 50.0), FitMode::DontFit),
+            1.0
+        );
         // Larger-than-window image.
-        assert_eq!(fit_zoom(v(100.0, 100.0), v(400.0, 200.0), FitMode::DontFit), 1.0);
+        assert_eq!(
+            fit_zoom(v(100.0, 100.0), v(400.0, 200.0), FitMode::DontFit),
+            1.0
+        );
     }
 
     #[test]
@@ -379,12 +385,30 @@ mod tests {
 
     #[test]
     fn fit_zoom_guards_degenerate_sizes() {
-        assert_eq!(fit_zoom(v(0.0, 100.0), v(50.0, 50.0), FitMode::AlwaysFit), 1.0);
-        assert_eq!(fit_zoom(v(100.0, 0.0), v(50.0, 50.0), FitMode::AlwaysFit), 1.0);
-        assert_eq!(fit_zoom(v(100.0, 100.0), v(0.0, 50.0), FitMode::ReduceOnly), 1.0);
-        assert_eq!(fit_zoom(v(100.0, 100.0), v(50.0, 0.0), FitMode::ReduceOnly), 1.0);
-        assert_eq!(fit_zoom(v(-5.0, 100.0), v(50.0, 50.0), FitMode::AlwaysFit), 1.0);
-        assert_eq!(fit_zoom(v(100.0, 100.0), v(-5.0, 50.0), FitMode::AlwaysFit), 1.0);
+        assert_eq!(
+            fit_zoom(v(0.0, 100.0), v(50.0, 50.0), FitMode::AlwaysFit),
+            1.0
+        );
+        assert_eq!(
+            fit_zoom(v(100.0, 0.0), v(50.0, 50.0), FitMode::AlwaysFit),
+            1.0
+        );
+        assert_eq!(
+            fit_zoom(v(100.0, 100.0), v(0.0, 50.0), FitMode::ReduceOnly),
+            1.0
+        );
+        assert_eq!(
+            fit_zoom(v(100.0, 100.0), v(50.0, 0.0), FitMode::ReduceOnly),
+            1.0
+        );
+        assert_eq!(
+            fit_zoom(v(-5.0, 100.0), v(50.0, 50.0), FitMode::AlwaysFit),
+            1.0
+        );
+        assert_eq!(
+            fit_zoom(v(100.0, 100.0), v(-5.0, 50.0), FitMode::AlwaysFit),
+            1.0
+        );
     }
 
     #[test]
@@ -412,7 +436,10 @@ mod tests {
         let fit = fit_zoom(v(1920.0, 1080.0), v(100_000.0, 1000.0), FitMode::ReduceOnly);
         // The old fixed floor was 0.1; fit here is ~0.019 and must be reachable.
         assert!(fit < 0.1, "fit zoom should be below the old floor");
-        assert!(min <= fit, "fit must be within the limits (min {min}, fit {fit})");
+        assert!(
+            min <= fit,
+            "fit must be within the limits (min {min}, fit {fit})"
+        );
         assert!(max >= MAX_SCREEN_PX_PER_IMAGE_PX);
     }
 
@@ -422,7 +449,10 @@ mod tests {
         let (min, max) = zoom_limits(v(2560.0, 1440.0), v(24.0, 24.0));
         let fill = zoom_to_fill(v(2560.0, 1440.0), v(24.0, 24.0));
         assert!(fill > 100.0);
-        assert!(max >= fill, "fill must be reachable (max {max}, fill {fill})");
+        assert!(
+            max >= fill,
+            "fill must be reachable (max {max}, fill {fill})"
+        );
         assert!(min <= 1.0);
     }
 
@@ -503,21 +533,45 @@ mod tests {
     fn image_pixel_at_rejects_outside_and_edge() {
         let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 50.0));
         // Left / above the rect.
-        assert_eq!(image_pixel_at(egui::pos2(9.0, 20.0), rect, 2.0, 50, 25), None);
-        assert_eq!(image_pixel_at(egui::pos2(10.0, 19.0), rect, 2.0, 50, 25), None);
+        assert_eq!(
+            image_pixel_at(egui::pos2(9.0, 20.0), rect, 2.0, 50, 25),
+            None
+        );
+        assert_eq!(
+            image_pixel_at(egui::pos2(10.0, 19.0), rect, 2.0, 50, 25),
+            None
+        );
         // Below the rect (past the last row).
-        assert_eq!(image_pixel_at(egui::pos2(10.0, 71.0), rect, 2.0, 50, 25), None);
+        assert_eq!(
+            image_pixel_at(egui::pos2(10.0, 71.0), rect, 2.0, 50, 25),
+            None
+        );
         // Max edge maps to width/height, which are not pixels.
-        assert_eq!(image_pixel_at(egui::pos2(110.0, 70.0), rect, 2.0, 50, 25), None);
+        assert_eq!(
+            image_pixel_at(egui::pos2(110.0, 70.0), rect, 2.0, 50, 25),
+            None
+        );
     }
 
     #[test]
     fn image_pixel_at_guards_degenerate() {
         let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 50.0));
-        assert_eq!(image_pixel_at(egui::pos2(10.0, 20.0), rect, 0.0, 50, 25), None);
-        assert_eq!(image_pixel_at(egui::pos2(10.0, 20.0), rect, -1.0, 50, 25), None);
-        assert_eq!(image_pixel_at(egui::pos2(10.0, 20.0), rect, 2.0, 0, 25), None);
-        assert_eq!(image_pixel_at(egui::pos2(10.0, 20.0), rect, 2.0, 50, 0), None);
+        assert_eq!(
+            image_pixel_at(egui::pos2(10.0, 20.0), rect, 0.0, 50, 25),
+            None
+        );
+        assert_eq!(
+            image_pixel_at(egui::pos2(10.0, 20.0), rect, -1.0, 50, 25),
+            None
+        );
+        assert_eq!(
+            image_pixel_at(egui::pos2(10.0, 20.0), rect, 2.0, 0, 25),
+            None
+        );
+        assert_eq!(
+            image_pixel_at(egui::pos2(10.0, 20.0), rect, 2.0, 50, 0),
+            None
+        );
     }
 
     #[test]
@@ -561,7 +615,11 @@ mod tests {
         let image = egui::Rect::from_min_size(egui::pos2(50_000.0, 50_000.0), egui::vec2(1.0, 1.0));
         for cap in [1usize, 4, 16, 64] {
             let offsets = tile_offsets(viewport, image, cap);
-            assert!(offsets.len() <= cap, "cap {cap} exceeded: {}", offsets.len());
+            assert!(
+                offsets.len() <= cap,
+                "cap {cap} exceeded: {}",
+                offsets.len()
+            );
             if cap > 0 {
                 assert_eq!(offsets[0], egui::Vec2::ZERO);
             }
@@ -683,13 +741,19 @@ mod tests {
 
     #[test]
     fn centered_window_pos_centers() {
-        assert_eq!(centered_window_pos(v(800.0, 600.0), v(1920.0, 1080.0)), v(560.0, 240.0));
+        assert_eq!(
+            centered_window_pos(v(800.0, 600.0), v(1920.0, 1080.0)),
+            v(560.0, 240.0)
+        );
     }
 
     #[test]
     fn centered_window_pos_goes_negative_when_larger() {
         // A window twice the monitor overhangs equally on both edges.
-        assert_eq!(centered_window_pos(v(200.0, 100.0), v(100.0, 100.0)), v(-50.0, 0.0));
+        assert_eq!(
+            centered_window_pos(v(200.0, 100.0), v(100.0, 100.0)),
+            v(-50.0, 0.0)
+        );
     }
 
     #[test]

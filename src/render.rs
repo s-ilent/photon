@@ -88,15 +88,15 @@ impl ImageRendererState {
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
 
-            let vertex_layout = wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<Vertex>() as u64,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 0,
-                    shader_location: 0,
-                }],
-            };
+        let vertex_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 0,
+            }],
+        };
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("photon_image_pipeline"),
@@ -385,10 +385,7 @@ impl egui_wgpu::CallbackTrait for DrawImageCallback {
         let state = state.as_ref();
         let ppp = screen_descriptor.pixels_per_point;
         let globals = Globals {
-            viewport_px: [
-                self.rect_points.min.x * ppp,
-                self.rect_points.min.y * ppp,
-            ],
+            viewport_px: [self.rect_points.min.x * ppp, self.rect_points.min.y * ppp],
             viewport_size_px: [
                 self.rect_points.width() * ppp,
                 self.rect_points.height() * ppp,

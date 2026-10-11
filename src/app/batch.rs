@@ -168,8 +168,8 @@ pub(crate) fn apply_operations(
             Operation::Grayscale => {
                 for px in img.pixels_mut() {
                     let [r, g, b, a] = px.0;
-                    let gray = ((77u32 * r as u32 + 150u32 * g as u32 + 29u32 * b as u32) >> 8)
-                        as u8;
+                    let gray =
+                        ((77u32 * r as u32 + 150u32 * g as u32 + 29u32 * b as u32) >> 8) as u8;
                     px.0 = [gray, gray, gray, a];
                 }
             }
@@ -415,10 +415,7 @@ pub(crate) fn convert_file(
     let stem = match job.source.file_stem() {
         Some(stem) => stem.to_os_string(),
         None => {
-            return FileStatus::Failed(format!(
-                "source has no file name: {}",
-                job.source.display()
-            ))
+            return FileStatus::Failed(format!("source has no file name: {}", job.source.display()))
         }
     };
 
@@ -527,10 +524,7 @@ mod tests {
 
     /// Build a row-major RGBA buffer from grayscale values (alpha = 255).
     fn gray_pixels(values: &[u8]) -> Vec<u8> {
-        values
-            .iter()
-            .flat_map(|&v| [v, v, v, 255u8])
-            .collect()
+        values.iter().flat_map(|&v| [v, v, v, 255u8]).collect()
     }
 
     /// The source pixel sequence, as gray levels, from an RGBA buffer.
@@ -705,7 +699,11 @@ mod tests {
         );
 
         let target = out_dir.join("photo.jpg");
-        assert!(target.exists(), "target {} was not written", target.display());
+        assert!(
+            target.exists(),
+            "target {} was not written",
+            target.display()
+        );
         let decoded = ::image::open(&target).expect("decode jpeg result");
         assert_eq!((decoded.width(), decoded.height()), (4, 3));
     }

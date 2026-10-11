@@ -126,7 +126,10 @@ mod tests {
             key_event(egui::Key::ArrowRight, egui::Modifiers::NONE),
         ]);
         assert_eq!(
-            commands.iter().filter(|c| **c == Command::NextImage).count(),
+            commands
+                .iter()
+                .filter(|c| **c == Command::NextImage)
+                .count(),
             1
         );
     }

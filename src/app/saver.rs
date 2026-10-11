@@ -116,11 +116,10 @@ impl PhotonApp {
 
         std::thread::spawn(move || {
             let result = match encode_to_path(&path, &rgba, width, height) {
-                Ok(()) => Ok(
-                    path.file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path.display().to_string()),
-                ),
+                Ok(()) => Ok(path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string())),
                 Err(e) => {
                     log::error!("Failed to save image to {:?}: {}", path, e);
                     Err(e)
