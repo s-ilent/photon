@@ -27,7 +27,10 @@ struct Globals {
     sharp: f32,
     /// 1.0 when the source bytes are linear-light, else 0.0.
     linear_source: f32,
-    _pad1: [f32; 2],
+    /// 1.0 when the source is float/HDR and needs a tonemap, else 0.0.
+    hdr_source: f32,
+    /// Exposure in EV; only meaningful when `hdr_source` is 1.0.
+    exposure: f32,
 }
 
 /// Shared GPU state: pipeline and bind group layouts. Built once at startup
@@ -500,6 +503,8 @@ pub(crate) struct DrawImageCallback {
     pub(crate) tint: [f32; 4],
     /// On-screen rect of the whole image, in egui points.
     pub(crate) rect_points: egui::Rect,
+    /// Exposure in EV for HDR sources.
+    pub(crate) exposure: f32,
     uniform_slot: Mutex<Option<wgpu::BindGroup>>,
 }
 
@@ -510,6 +515,7 @@ impl DrawImageCallback {
         sharp: bool,
         tint: [f32; 4],
         rect_points: egui::Rect,
+        exposure: f32,
     ) -> Self {
         Self {
             image,
@@ -517,6 +523,7 @@ impl DrawImageCallback {
             sharp,
             tint,
             rect_points,
+            exposure,
             uniform_slot: Mutex::new(None),
         }
     }
@@ -553,7 +560,8 @@ impl egui_wgpu::CallbackTrait for DrawImageCallback {
                 self.image.color_space,
                 crate::image_loader::ColorSpace::Linear
             ) as u8 as f32,
-            _pad1: [0.0; 2],
+            hdr_source: self.image.hdr as u8 as f32,
+            exposure: self.exposure,
         };
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("photon_frame_globals"),
@@ -643,6 +651,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<Globals>(), 64);
         assert_eq!(std::mem::offset_of!(Globals, sharp), 48);
         assert_eq!(std::mem::offset_of!(Globals, linear_source), 52);
+        assert_eq!(std::mem::offset_of!(Globals, hdr_source), 56);
+        assert_eq!(std::mem::offset_of!(Globals, exposure), 60);
         let g = Globals {
             viewport_px: [1.0, 2.0],
             viewport_size_px: [3.0, 4.0],
@@ -651,7 +661,8 @@ mod tests {
             tint: [1.0; 4],
             sharp: 1.0,
             linear_source: 1.0,
-            _pad1: [0.0; 2],
+            hdr_source: 1.0,
+            exposure: 0.0,
         };
         assert_eq!(bytemuck::bytes_of(&g).len(), 64);
     }
@@ -710,13 +721,14 @@ mod gpu_tests {
     }
 
     /// Render `image`'s layer 0 into a 4×4 `Rgba8Unorm` target and return the
-    /// tightly packed RGBA8 pixels. The image's own colour space drives the
-    /// shader's linear-source flag, matching `DrawImageCallback::prepare`.
+    /// tightly packed RGBA8 pixels. The image's own colour space and hdr flag
+    /// drive the shader's source flags; `exposure` is passed through verbatim.
     fn draw_offscreen(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         state: &ImageRendererState,
         image: &RenderImage,
+        exposure: f32,
     ) -> [u8; 64] {
         const SIZE: u32 = 4;
         let format = wgpu::TextureFormat::Rgba8Unorm;
@@ -747,7 +759,8 @@ mod gpu_tests {
                 image.color_space,
                 crate::image_loader::ColorSpace::Linear
             ) as u8 as f32,
-            _pad1: [0.0; 2],
+            hdr_source: image.hdr as u8 as f32,
+            exposure,
         };
         let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("photon_gpu_test_globals"),
@@ -1003,7 +1016,7 @@ fn main() {
             crate::image_loader::ColorSpace::Srgb,
         );
 
-        let pixels = draw_offscreen(&device, &queue, &state, &image);
+        let pixels = draw_offscreen(&device, &queue, &state, &image, 0.0);
         let px = |x: u32, y: u32| -> [u8; 4] {
             let i = ((y * 4 + x) * 4) as usize;
             [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
@@ -1060,7 +1073,7 @@ fn main() {
             ColorSpace::Linear,
         );
 
-        let pixels = draw_offscreen(&device, &queue, &state, &image);
+        let pixels = draw_offscreen(&device, &queue, &state, &image, 0.0);
         let px = |x: u32, y: u32| -> [u8; 4] {
             let i = ((y * 4 + x) * 4) as usize;
             [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
@@ -1070,5 +1083,73 @@ fn main() {
             c[0] > 200 && c[1] < 60 && c[2] < 60,
             "BC1 texel should be red, got {c:?}"
         );
+    }
+
+    /// A float16 (HDR) source runs the Reinhard tonemap and responds to exposure.
+    #[test]
+    fn float16_texture_is_tonemapped_and_exposed() {
+        let Some((device, queue)) = headless_device() else {
+            eprintln!("no GPU adapter; skipping float16_texture_is_tonemapped_and_exposed");
+            return;
+        };
+        use crate::image_loader::{ColorSpace, DecodedFormat};
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let state = ImageRendererState::new(&device, format);
+
+        // 4x4 Rgba16Float, every texel RGB = 4.0, A = 1.0 (packed little-endian).
+        let mut rgba = Vec::new();
+        for _ in 0..16 {
+            for c in [4.0f32, 4.0, 4.0, 1.0] {
+                rgba.extend_from_slice(&half::f16::from_f32(c).to_le_bytes());
+            }
+        }
+        let ctx = RenderContext {
+            device: &device,
+            queue: &queue,
+            tile_layout: &state.tile_layout,
+            max_dim: 64,
+        };
+        let image = build_render_image(
+            &ctx,
+            vec![rgba],
+            4,
+            4,
+            false,
+            DecodedFormat::Float16,
+            ColorSpace::Linear,
+        );
+
+        let top_left = |pixels: &[u8; 64]| -> [u8; 4] {
+            [pixels[0], pixels[1], pixels[2], pixels[3]]
+        };
+
+        // 0 EV: 4.0 -> reinhard 0.8 -> gamma ~0.9063 -> ~231.
+        let base = draw_offscreen(&device, &queue, &state, &image, 0.0);
+        let c0 = top_left(&base);
+        for ch in 0..3 {
+            assert!(
+                (c0[ch] as i32 - 231).abs() <= 3,
+                "exposure 0 channel {ch} expected ~231, got {c0:?}"
+            );
+        }
+        assert!(
+            (c0[3] as i32 - 255).abs() <= 3,
+            "alpha expected ~255, got {c0:?}"
+        );
+
+        // 1 EV doubles the linear value -> 8/9 -> gamma ~0.9495 -> ~242, brighter.
+        let bright = draw_offscreen(&device, &queue, &state, &image, 1.0);
+        let c1 = top_left(&bright);
+        for ch in 0..3 {
+            assert!(
+                (c1[ch] as i32 - 242).abs() <= 3,
+                "exposure 1 channel {ch} expected ~242, got {c1:?}"
+            );
+            assert!(
+                c1[ch] > c0[ch],
+                "exposure 1 should be brighter on channel {ch}: {c0:?} vs {c1:?}"
+            );
+        }
     }
 }
