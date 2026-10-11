@@ -1,5 +1,8 @@
 use std::path::Path;
 
+use ::image::metadata::Orientation;
+use ::image::ImageDecoder;
+
 /// Upper bound on decoded layers per file. Texture arrays can be arbitrarily
 /// deep; decoding/uploading every layer of a huge array would exhaust memory.
 /// Cubemaps (6 faces) are nowhere near this.
@@ -90,6 +93,11 @@ impl std::error::Error for DecodeError {}
 /// header parsing and decodes BC1–BC7 + uncompressed variants). All other
 /// supported formats go through the `image` crate as before and produce a
 /// single layer.
+///
+/// The `image`-crate path applies the image's Exif orientation before handing
+/// back pixels, so phone photos with a rotated sensor load upright and the
+/// reported dimensions reflect the rotation. Formats without Exif (or with a
+/// broken Exif block) decode unrotated.
 pub fn load_image(path: &Path) -> Result<DecodedImage, DecodeError> {
     let extension = path
         .extension()
@@ -108,9 +116,18 @@ pub fn load_image(path: &Path) -> Result<DecodedImage, DecodeError> {
         .with_guessed_format()
         .map_err(|e| DecodeError::UnknownFormat(e.to_string()))?;
 
-    let img = img_reader
-        .decode()
+    let mut decoder = img_reader
+        .into_decoder()
         .map_err(|e| DecodeError::UnsupportedFormat(e.to_string()))?;
+
+    // Exif orientation (roadmap §3). A missing or malformed EXIF block must
+    // never fail an otherwise-decodable image, so an orientation error falls
+    // back to `NoTransforms` and we decode the pixels as-is.
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+
+    let mut img = ::image::DynamicImage::from_decoder(decoder)
+        .map_err(|e| DecodeError::UnsupportedFormat(e.to_string()))?;
+    img.apply_orientation(orientation);
 
     let (w, h) = (img.width(), img.height());
     let rgba = img.to_rgba8();
@@ -326,6 +343,116 @@ mod tests {
         };
         assert!(matches!(err, DecodeError::InvalidData(_)));
         assert!(err.is_unsupported_format(), "decode failure is a format error");
+    }
+
+    /// Encode a small RGBA8 PNG in memory, optionally tagged with a raw Exif
+    /// chunk (little-endian TIFF header) via the PNG `eXIf` chunk.
+    fn encode_rgba_png(pixels: &[u8], w: u32, h: u32, exif: Option<Vec<u8>>) -> Vec<u8> {
+        use ::image::codecs::png::PngEncoder;
+        use ::image::{ExtendedColorType, ImageEncoder};
+
+        let mut out = Vec::new();
+        {
+            let mut encoder = PngEncoder::new(&mut out);
+            if let Some(exif) = exif {
+                encoder.set_exif_metadata(exif).expect("set exif");
+            }
+            encoder
+                .write_image(pixels, w, h, ExtendedColorType::Rgba8)
+                .expect("encode png");
+        }
+        out
+    }
+
+    /// A minimal big-endian-free (little-endian) TIFF Exif chunk carrying only
+    /// an orientation entry (tag 0x112). Layout: "II*\0", IFD offset 8, one
+    /// entry, the orientation, then a null next-IFD pointer.
+    fn exif_chunk_with_orientation(orientation: u8) -> Vec<u8> {
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(b"II\x2a\x00"); // little-endian TIFF magic
+        chunk.extend_from_slice(&8u32.to_le_bytes()); // IFD offset
+        chunk.extend_from_slice(&1u16.to_le_bytes()); // entry count
+        chunk.extend_from_slice(&0x0112u16.to_le_bytes()); // Orientation tag
+        chunk.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+        chunk.extend_from_slice(&1u32.to_le_bytes()); // count
+        chunk.extend_from_slice(&(orientation as u16).to_le_bytes()); // value
+        chunk.extend_from_slice(&0u16.to_le_bytes()); // padding
+        chunk.extend_from_slice(&0u32.to_le_bytes()); // next IFD = none
+        chunk
+    }
+
+    /// Pin the Exif byte <-> `Orientation` mapping the wiring relies on.
+    #[test]
+    fn test_orientation_exif_mapping() {
+        assert_eq!(Orientation::from_exif(1), Some(Orientation::NoTransforms));
+        assert_eq!(Orientation::from_exif(6), Some(Orientation::Rotate90));
+        assert_eq!(Orientation::from_exif(8), Some(Orientation::Rotate270));
+        assert_eq!(Orientation::from_exif(9), None);
+
+        for orient in [
+            Orientation::NoTransforms,
+            Orientation::Rotate90,
+            Orientation::Rotate180,
+            Orientation::Rotate270,
+            Orientation::FlipHorizontal,
+            Orientation::FlipVertical,
+            Orientation::Rotate90FlipH,
+            Orientation::Rotate270FlipH,
+        ] {
+            assert_eq!(
+                Orientation::from_exif(orient.to_exif()),
+                Some(orient),
+                "to_exif/from_exif round-trip for {orient:?}"
+            );
+        }
+    }
+
+    /// An ordinary image with no Exif decodes with unchanged dimensions and
+    /// pixels (orientation falls back to `NoTransforms`).
+    #[test]
+    fn test_no_exif_png_unchanged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("plain.png");
+
+        let (w, h) = (3u32, 2u32);
+        let pixels: Vec<u8> = (0..(w * h)).flat_map(|i| [i as u8, 0, 0, 255]).collect();
+        let png = encode_rgba_png(&pixels, w, h, None);
+        std::fs::write(&path, png).expect("write");
+
+        let decoded = load_image(&path).expect("load_image ok");
+        assert_eq!((decoded.width, decoded.height), (w, h));
+        assert_eq!(decoded.layers.len(), 1);
+        assert_eq!(decoded.layers[0], pixels, "no-Exif pixels must be untouched");
+        assert!(!decoded.is_cubemap);
+    }
+
+    /// An image tagged Exif orientation 6 (rotate 90° CW) decodes upright: the
+    /// reported dimensions swap and the pixels are rotated, not dropped.
+    #[test]
+    fn test_exif_orientation_rotates_and_swaps_dimensions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("rotated.png");
+
+        let (w, h) = (3u32, 2u32);
+        // Distinct pixel values so a rotation is detectable as a permutation.
+        let pixels: Vec<u8> = (0..(w * h)).flat_map(|i| [i as u8, 0, 0, 255]).collect();
+        let exif = exif_chunk_with_orientation(6);
+        let png = encode_rgba_png(&pixels, w, h, Some(exif));
+        std::fs::write(&path, png).expect("write");
+
+        let decoded = load_image(&path).expect("load_image ok");
+        // Rotate90 swaps width and height.
+        assert_eq!((decoded.width, decoded.height), (h, w));
+
+        // Every source pixel survives, just relocated.
+        let mut got: Vec<[u8; 4]> = decoded.layers[0]
+            .chunks(4)
+            .map(|p| [p[0], p[1], p[2], p[3]])
+            .collect();
+        let mut want: Vec<[u8; 4]> = pixels.chunks(4).map(|p| [p[0], p[1], p[2], p[3]]).collect();
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(got, want, "rotation must preserve pixel data as a permutation");
     }
 
     /// The variant -> classification mapping for the whole vocabulary.
