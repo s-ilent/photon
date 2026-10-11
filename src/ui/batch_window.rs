@@ -5,7 +5,8 @@
 //! reporting through the `BatchMessage` channel drained in `check_batch_status`.
 
 use crate::app::batch::{
-    self, ConversionJob, FileStatus, Operation, OutputFormat, OverwritePolicy, ResampleFilter,
+    self, ConversionJob, FileStatus, FilterKind, Operation, OutputFormat, OverwritePolicy,
+    ResampleFilter, SaveOptions,
 };
 use crate::app::{BatchMessage, BatchState, PhotonApp};
 use eframe::egui;
@@ -25,10 +26,11 @@ enum OperationChoice {
     Grayscale,
     Negative,
     Resize,
+    Filter(FilterKind),
 }
 
 impl OperationChoice {
-    const ALL: [OperationChoice; 8] = [
+    const ALL: [OperationChoice; 15] = [
         OperationChoice::Rotate90,
         OperationChoice::Rotate180,
         OperationChoice::Rotate270,
@@ -37,6 +39,13 @@ impl OperationChoice {
         OperationChoice::Grayscale,
         OperationChoice::Negative,
         OperationChoice::Resize,
+        OperationChoice::Filter(FilterKind::Blur),
+        OperationChoice::Filter(FilterKind::Soften),
+        OperationChoice::Filter(FilterKind::Sharpen),
+        OperationChoice::Filter(FilterKind::Gaussian3),
+        OperationChoice::Filter(FilterKind::Gaussian5),
+        OperationChoice::Filter(FilterKind::Emboss),
+        OperationChoice::Filter(FilterKind::Edge),
     ];
 
     fn label(self) -> &'static str {
@@ -49,6 +58,7 @@ impl OperationChoice {
             OperationChoice::Grayscale => "Grayscale",
             OperationChoice::Negative => "Negative",
             OperationChoice::Resize => "Resize",
+            OperationChoice::Filter(kind) => kind.label(),
         }
     }
 
@@ -64,6 +74,7 @@ impl OperationChoice {
             OperationChoice::FlipVertical => Operation::FlipVertical,
             OperationChoice::Grayscale => Operation::Grayscale,
             OperationChoice::Negative => Operation::Negative,
+            OperationChoice::Filter(kind) => Operation::Filter(kind),
             OperationChoice::Resize => {
                 if width == 0 && height == 0 {
                     return None;
@@ -97,6 +108,7 @@ fn operation_label(op: &Operation) -> String {
         Operation::FlipVertical => "Flip vertical".to_string(),
         Operation::Grayscale => "Grayscale".to_string(),
         Operation::Negative => "Negative".to_string(),
+        Operation::Filter(kind) => kind.label().to_string(),
         Operation::Resize {
             width,
             height,
@@ -141,12 +153,12 @@ fn summarize(statuses: &[Option<FileStatus>]) -> (usize, usize, usize) {
 }
 
 /// Build one [`ConversionJob`] per source file, all sharing the run's target
-/// folder, format, quality and operation chain. Pure — no I/O.
+/// folder, format and operation chain. Encoder settings travel separately as
+/// [`SaveOptions`]. Pure — no I/O.
 fn build_jobs(
     files: &[PathBuf],
     target_dir: &Path,
     format: OutputFormat,
-    jpeg_quality: u8,
     operations: &[Operation],
 ) -> Vec<ConversionJob> {
     files
@@ -156,7 +168,6 @@ fn build_jobs(
             target_dir: target_dir.to_path_buf(),
             format,
             operations: operations.to_vec(),
-            jpeg_quality,
         })
         .collect()
 }
@@ -170,13 +181,23 @@ fn add_files(batch: &mut BatchState, paths: Vec<PathBuf>) {
     }
 }
 
-/// Convert `jobs` on a background thread and report the per-file statuses back
-/// over the returned channel. `run_batch` fans the work out across `rayon`'s
-/// pool, so the one message arrives once every file is done.
-fn spawn_batch(jobs: Vec<ConversionJob>, policy: OverwritePolicy) -> Receiver<BatchMessage> {
+/// Convert `jobs` on a background thread and report progress plus the per-file
+/// statuses back over the returned channel. `run_batch_with_progress` fans the
+/// work out across `rayon`'s pool and reports `(done, total)` as files finish,
+/// so the progress bar is determinate; the final `Finished` message arrives once
+/// every file is done.
+fn spawn_batch(
+    jobs: Vec<ConversionJob>,
+    policy: OverwritePolicy,
+    options: SaveOptions,
+) -> Receiver<BatchMessage> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let statuses = batch::run_batch(&jobs, policy);
+        let progress_tx = tx.clone();
+        let statuses =
+            batch::run_batch_with_progress(&jobs, policy, &options, move |done, total| {
+                let _ = progress_tx.send(BatchMessage::Progress { done, total });
+            });
         let _ = tx.send(BatchMessage::Finished(statuses));
     });
     rx
@@ -188,16 +209,11 @@ fn start_batch(batch: &mut BatchState) {
     let Some(dir) = batch.output_dir.clone() else {
         return;
     };
-    let jobs = build_jobs(
-        &batch.files,
-        &dir,
-        batch.format,
-        batch.jpeg_quality,
-        &batch.operations,
-    );
+    let jobs = build_jobs(&batch.files, &dir, batch.format, &batch.operations);
     batch.statuses = vec![None; jobs.len()];
+    batch.progress = (0, jobs.len());
     batch.running = true;
-    batch.receiver = Some(spawn_batch(jobs, batch.overwrite));
+    batch.receiver = Some(spawn_batch(jobs, batch.overwrite, batch.save_options));
 }
 
 impl PhotonApp {
@@ -223,6 +239,11 @@ impl PhotonApp {
     pub(crate) fn check_batch_status(&mut self, ctx: &egui::Context) {
         if let Some(receiver) = self.batch.receiver.take() {
             match receiver.try_recv() {
+                Ok(BatchMessage::Progress { done, total }) => {
+                    self.batch.progress = (done, total);
+                    self.batch.receiver = Some(receiver);
+                    ctx.request_repaint();
+                }
                 Ok(BatchMessage::Finished(statuses)) => {
                     self.batch.statuses = statuses.into_iter().map(Some).collect();
                     self.batch.running = false;
@@ -332,7 +353,7 @@ fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
             });
         if batch.format == OutputFormat::Jpeg {
             ui.label("Quality:");
-            ui.add(egui::DragValue::new(&mut batch.jpeg_quality).range(1..=100));
+            ui.add(egui::DragValue::new(&mut batch.save_options.jpeg_quality).range(1..=100));
         }
     });
 
@@ -452,8 +473,14 @@ fn run_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     });
 
     if batch.running {
-        // Indeterminate: `run_batch` reports only when the whole list is done.
-        ui.add(egui::ProgressBar::new(0.0).animate(true).show_percentage());
+        // Determinate: `run_batch_with_progress` reports (done, total).
+        let (done, total) = batch.progress;
+        let fraction = if total == 0 {
+            0.0
+        } else {
+            done as f32 / total as f32
+        };
+        ui.add(egui::ProgressBar::new(fraction).show_percentage());
     }
 }
 
@@ -473,14 +500,13 @@ mod tests {
     fn build_jobs_maps_every_file_with_shared_settings() {
         let files = vec![PathBuf::from("/in/a.png"), PathBuf::from("/in/b.jpg")];
         let ops = vec![Operation::Grayscale, sample_op()];
-        let jobs = build_jobs(&files, Path::new("/out"), OutputFormat::Jpeg, 80, &ops);
+        let jobs = build_jobs(&files, Path::new("/out"), OutputFormat::Jpeg, &ops);
 
         assert_eq!(jobs.len(), 2);
         for (job, file) in jobs.iter().zip(&files) {
             assert_eq!(&job.source, file);
             assert_eq!(job.target_dir, PathBuf::from("/out"));
             assert_eq!(job.format, OutputFormat::Jpeg);
-            assert_eq!(job.jpeg_quality, 80);
             assert_eq!(job.operations, ops);
         }
     }
@@ -538,5 +564,35 @@ mod tests {
             OperationChoice::Grayscale.to_operation(0, 0, ResampleFilter::Nearest),
             Some(Operation::Grayscale)
         );
+    }
+
+    #[test]
+    fn filter_choices_map_to_filter_operations() {
+        for kind in [
+            FilterKind::Blur,
+            FilterKind::Soften,
+            FilterKind::Sharpen,
+            FilterKind::Gaussian3,
+            FilterKind::Gaussian5,
+            FilterKind::Emboss,
+            FilterKind::Edge,
+        ] {
+            assert_eq!(
+                OperationChoice::Filter(kind).to_operation(0, 0, ResampleFilter::Nearest),
+                Some(Operation::Filter(kind)),
+                "{kind:?} should build a Filter operation"
+            );
+        }
+    }
+
+    #[test]
+    fn operation_choice_labels_are_nonempty_and_distinct() {
+        let mut seen = std::collections::HashSet::new();
+        for choice in OperationChoice::ALL {
+            let label = choice.label();
+            assert!(!label.is_empty());
+            assert!(seen.insert(label), "duplicate operation label {label:?}");
+        }
+        assert_eq!(seen.len(), OperationChoice::ALL.len());
     }
 }

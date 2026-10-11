@@ -485,6 +485,11 @@ pub(crate) fn convert_file(
 ///
 /// `rayon`'s work-stealing `par_iter` bounds (and reuses) the thread pool;
 /// `collect` preserves input order, so callers can zip statuses to jobs.
+///
+/// The Batch Convert window drives [`run_batch_with_progress`] directly so it
+/// can show a progress bar; this headless entry stays for tests and callers
+/// with no UI.
+#[allow(dead_code)]
 pub(crate) fn run_batch(
     jobs: &[ConversionJob],
     policy: OverwritePolicy,

@@ -95,6 +95,8 @@ pub struct SaveStatus {
 /// via `rayon`) and sends exactly one message when every file is done, so the
 /// render loop is never blocked on conversion.
 pub(crate) enum BatchMessage {
+    /// Files completed so far, for the determinate progress bar.
+    Progress { done: usize, total: usize },
     /// Every job finished; one status per submitted job, in job order.
     Finished(Vec<batch::FileStatus>),
 }
@@ -110,9 +112,8 @@ pub(crate) struct BatchState {
     pub(crate) format: batch::OutputFormat,
     /// Output folder chosen with the folder picker; `None` until picked.
     pub(crate) output_dir: Option<PathBuf>,
-    /// JPEG quality (1–100); only consulted when `format` is
-    /// [`batch::OutputFormat::Jpeg`].
-    pub(crate) jpeg_quality: u8,
+    /// Encoder settings for the run (JPEG quality, PNG compression).
+    pub(crate) save_options: batch::SaveOptions,
     /// What to do when a target file already exists.
     pub(crate) overwrite: batch::OverwritePolicy,
     /// The operation chain applied to every file, in order.
@@ -124,6 +125,8 @@ pub(crate) struct BatchState {
     pub(crate) receiver: Option<Receiver<BatchMessage>>,
     /// True from the moment Run is clicked until the worker reports back.
     pub(crate) running: bool,
+    /// `(done, total)` files for the running batch, for the progress bar.
+    pub(crate) progress: (usize, usize),
     /// UI scratch: index into the "add step" combo's choice list.
     pub(crate) pending_op: usize,
     /// UI scratch: pending resize width (`0` = keep aspect ratio).
@@ -141,12 +144,13 @@ impl Default for BatchState {
             files: Vec::new(),
             format: batch::OutputFormat::Png,
             output_dir: None,
-            jpeg_quality: 90,
+            save_options: batch::SaveOptions::default(),
             overwrite: batch::OverwritePolicy::Overwrite,
             operations: Vec::new(),
             statuses: Vec::new(),
             receiver: None,
             running: false,
+            progress: (0, 0),
             pending_op: 0,
             resize_width: 0,
             resize_height: 0,
