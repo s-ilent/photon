@@ -979,8 +979,10 @@ mod tests {
         assert_eq!(packed.len(), 8, "4 components * 2 bytes");
 
         let decoded: Vec<f32> = packed
-            .chunks_exact(2)
-            .map(|b| half::f16::from_le_bytes([b[0], b[1]]).to_f32())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| half::f16::from_le_bytes(*b).to_f32())
             .collect();
         assert_eq!(decoded, vec![1.0, 0.5, 2.0, -1.0]);
 
