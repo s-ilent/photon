@@ -111,6 +111,7 @@ mod tests {
             zoom_reset: ZoomReset::Never,
             fit_mode: FitMode::AlwaysFit,
             lock_zoom: true,
+            exposure: -1.5,
             fit_window: crate::app::view::FitWindow::AlwaysResize,
             sort_mode: SortMode::FileSizeSmallest,
         };

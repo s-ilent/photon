@@ -81,6 +81,15 @@ impl app::PhotonApp {
                         self.zoom_lock.unlock();
                     }
                 }
+                // HDR exposure (shader M4): applied to float sources before the
+                // tonemap; ignored for non-HDR images.
+                ui.horizontal(|ui| {
+                    ui.label("HDR exposure (EV):");
+                    ui.add(
+                        egui::Slider::new(&mut self.settings.exposure, -6.0..=6.0)
+                            .fixed_decimals(2),
+                    );
+                });
                 // Sharp (pixel) scaling is a live toggle: the shader snaps the
                 // sample point to the texel centre when magnified.
                 ui.checkbox(

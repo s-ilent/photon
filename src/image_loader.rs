@@ -1037,8 +1037,10 @@ mod tests {
         assert_eq!(decoded.layers[0].len(), (w * h * 8) as usize, "8 bytes/texel");
 
         let got: Vec<f32> = decoded.layers[0]
-            .chunks_exact(2)
-            .map(|b| half::f16::from_le_bytes([b[0], b[1]]).to_f32())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| half::f16::from_le_bytes(*b).to_f32())
             .collect();
         assert_eq!(got, floats, "f16 round-trip must reproduce the f32 input");
     }

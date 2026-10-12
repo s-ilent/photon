@@ -121,7 +121,7 @@ impl PhotonApp {
                 sharp,
                 tint,
                 rect,
-                0.0, // HDR exposure wiring lands with the persisted setting.
+                self.settings.exposure,
             );
             painter.add(egui_wgpu::Callback::new_paint_callback(rect, callback));
         }

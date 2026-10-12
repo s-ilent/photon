@@ -70,6 +70,9 @@ pub struct AppSettings {
     /// switching images keeps the locked zoom and recentres instead of applying
     /// the `zoom_reset` policy.
     pub lock_zoom: bool,
+    /// Exposure in EV applied to HDR (float) sources before tonemapping
+    /// (Roadmap §5b / shader M4). Ignored for non-HDR images.
+    pub exposure: f32,
     pub sort_mode: SortMode,
 }
 
@@ -86,6 +89,7 @@ impl Default for AppSettings {
             fit_mode: crate::app::view::FitMode::ReduceOnly,
             fit_window: crate::app::view::FitWindow::DontFit,
             lock_zoom: false,
+            exposure: 0.0,
             sort_mode: SortMode::default(),
         }
     }
