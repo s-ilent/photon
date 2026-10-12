@@ -182,6 +182,12 @@ fallback. This introduced the **colour-space model** (`ColorSpace` on the image:
 `Srgb`/`Linear`) because the canvas is a display/gamma-space pass — the field is
 what EXR/HDR/RAW and the ICC output profile (§9) key off.
 
+**HDR + tonemap (shader M4) — shipped 2026-10-13.** EXR/HDR and float/BC6H DDS
+decode to half-float (`Rgba16Float` textures, no device feature needed) so
+values above 1.0 survive; the shader applies exposure (EV, persisted setting)
+then Reinhard before the display encode. Open: a tonemap-operator selector
+(ACES etc.), and HDR-aware copy/save (currently 8-bit via `load_image`).
+
 ## 6. Panorama creator
 
 - [ ] Horizontal / vertical stitch by **concatenation** (no feature matching:

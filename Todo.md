@@ -15,15 +15,13 @@ comes into focus, add it here with a concrete plan.
 
 What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
 
-1. **Shader M4: HDR + tonemap** — `Rgba32Float`/`Rgba16Float` float textures for
-   EXR and BC6H, exposure/gamma tonemap in the shader. The colour-space field
-   and the `linear_source` shader branch from M3 are its substrate. (M5 cubemap
-   view and the normal-map preview are the other shader-pass items.)
-2. **Command registry + params serialisation** (`Roadmap.md` §1) — the spine
+1. **Command registry + params serialisation** (`Roadmap.md` §1) — the spine
    that makes key-rebinding, the CLI, and batch cheap; build it before those
    so they share one dispatch table.
-3. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC (now with the
+2. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC (now with the
    `ColorSpace` field ready to consume).
+3. **Shader M5: cubemap view** and the **normal-map preview** — the remaining
+   shader-pass items (M3 BCn and M4 HDR/tonemap both landed 2026-10-13).
 4. **Batch rename + the remaining batch items** (`Roadmap.md` §5) — recipe
    import/export and the interactive overwrite dialog (the chain, save options
    and progress landed 2026-10-12).
@@ -32,9 +30,10 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
    Implement only against their design when it's ready.
 7. **Property map mode** — when a spec exists.
 
-Done recently (2026-10-12): viewing polish (§3), the editing core (§4), the
-batch polish (§5), and shader **M3 native BCn upload + the colour-space model**
-(§5b) are all complete; see the Done log. Next up is the shader M4 arc.
+Done recently (2026-10-12/13): viewing polish (§3), the editing core (§4), the
+batch polish (§5), and shader **M3 native BCn + the colour-space model** and
+**M4 HDR + tonemap** (§5b) are all complete; see the Done log. Next up is the
+command-registry spine (§1).
 
 ---
 
@@ -161,9 +160,13 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
       output texture), faster than CPU especially for convolution. **Keep the
       CPU implementations as the fallback path**; resampling (resize) stays
       CPU. Not a now-mandate.
-- [ ] **M4: HDR + tonemap** — `Rgba32Float` (needs `float32_filterable` or
-      nearest sampling), EXR and BC6H float paths, exposure/gamma tonemap.
-      BC6H currently uses the RGBA8 path; revisit `imagef32_from_dds`.
+- [x] **M4: HDR + tonemap** — DONE 2026-10-13. EXR/HDR and float/BC6H DDS decode
+      to half-float (`DecodedFormat::Float16`, `Rgba16Float` textures — filterable
+      in core WebGPU with no device feature, chosen over `Rgba32Float` +
+      `float32_filterable` to avoid a capability branch) so values above 1.0
+      survive. `Globals::hdr_source`/`exposure` drive the shader: exposure (EV,
+      persisted setting + slider) then Reinhard, then the M3 display encode.
+      Info bar shows an `HDR` chip. Copy/save of HDR still re-decode to 8-bit.
 - [ ] **M5: cubemap view** — true pan-around-the-sphere navigation (decided
       2026-10-11: face buttons now, 3D view here).
 - [ ] **Normal-map preview mode** — reconstruct `B = sqrt(1 - R² - G²)` and/or
@@ -217,6 +220,24 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-13 (shader M4: HDR + tonemap)
+- **Float/HDR path**: EXR/HDR decode via `into_rgba32f()` (was clamped through
+  `to_rgba8`) and float/BC6H DDS via `SurfaceRgba32Float`, packed to
+  `DecodedFormat::Float16` (LE `f16`) and uploaded as `Rgba16Float` — filterable
+  in core WebGPU with no device feature, so no capability branch (chose half
+  over `Rgba32Float`+`float32_filterable` for exactly that reason; halves VRAM
+  for big cubemaps).
+- **Tonemap**: `Globals` gained `hdr_source`/`exposure` (the struct stays 64
+  bytes); the shader applies exposure (EV, persisted setting + Settings slider)
+  then Reinhard, then the M3 display encode. 8-bit linear sources still get
+  gamma-encode only; sRGB sources still pass through.
+- Info bar shows `Linear`/`sRGB` plus an `HDR` chip. Smoke-verified: a 4×
+  gradient EXR renders tonemapped (not clipped), logged as
+  `Float16`/`Linear`. GPU test asserts the tonemapped byte (231) and that +1 EV
+  brightens it (242). Tests: 139 → 145.
+- Known limit (open): copy/save of an HDR image still re-decode to 8-bit; the
+  tonemap operator is fixed to Reinhard.
 
 ### 2026-10-12 (UI polish + cleanup pass)
 - **Dracula theme fixed** — it was only half-applied. egui buttons and
