@@ -50,6 +50,11 @@ complete; see the Done log.
       the pipeline decodes/uploads mip 0 only
       (`decode_layers_mipmaps_dds(.., 0..1)`), so a mip selector needs either
       per-mip decode on demand or the full chain at load.
+- [ ] **Info window layout redesign** — the 2026-10-14 bounding (window width
+      cap + truncated value labels) is a stopgap; the user rejected a size cap
+      as the solution. The real fix is a layout that adapts — long values wrap,
+      the window stays resizable — rather than clamping. Redesign when next
+      touched.
 - [~] **Batch converter + operation chain** (`Roadmap.md` §5) — engine core
       (`app/batch.rs`) and the **Convert… window** (`ui/batch_window.rs`) are
       DONE (2026-10-11): file list, format/quality/folder, operation chain,
