@@ -278,7 +278,7 @@ impl PhotonApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
             }
             Command::OpenBatchConvert => self.batch.open = true,
-            Command::ImageInformation => self.info_open = true,
+            Command::ImageInformation => self.info_open = !self.info_open,
             Command::RotateLeft => self.apply_edit(ImageOp::RotateLeft),
             Command::RotateRight => self.apply_edit(ImageOp::RotateRight),
             Command::Rotate180 => self.apply_edit(ImageOp::Rotate180),
@@ -410,5 +410,17 @@ mod tests {
         assert!(app.command_enabled(Command::Open));
         assert!(app.command_enabled(Command::Paste));
         assert!(app.command_enabled(Command::OpenBatchConvert));
+    }
+
+    /// Ctrl+I toggles the window: invoking it again closes what it opened.
+    #[test]
+    fn image_information_command_toggles_the_window() {
+        let mut app = PhotonApp::new();
+        let ctx = egui::Context::default();
+        assert!(!app.info_open);
+        app.run_command(Command::ImageInformation, &ctx);
+        assert!(app.info_open);
+        app.run_command(Command::ImageInformation, &ctx);
+        assert!(!app.info_open);
     }
 }

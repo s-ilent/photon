@@ -37,6 +37,11 @@ rayon = "1.12.0"
 pollster = "0.4"
 tempfile = "3"
 
+# egui-winit carries a one-hunk patch (Ctrl+V on image clipboards);
+# see VENDOR_NOTES.md.
+[patch.crates-io]
+egui-winit = { path = "vendor/egui-winit" }
+
 [profile.release]
 opt-level = 3
 lto = true

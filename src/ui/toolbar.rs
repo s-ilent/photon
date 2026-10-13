@@ -81,6 +81,13 @@ impl app::PhotonApp {
             if ui.button(icons::GEAR).on_hover_text("Settings").clicked() {
                 self.settings_open = !self.settings_open;
             }
+            if ui
+                .button(icons::INFO)
+                .on_hover_text("Image Information (Ctrl+I)")
+                .clicked()
+            {
+                self.info_open = !self.info_open;
+            }
             ui.separator();
             if ui
                 .button(format!("{} {}", icons::MOUSE_SIMPLE, self.mode.name()))

@@ -129,7 +129,7 @@ There are two background threads plus the main (render) thread, connected by `st
 
 Zoom/pan reset on image switch per the configured `ZoomReset` setting (`always` / `dimension_change` / `never`, default `dimension_change`) — see the tests in `app/loader.rs`. All settings persist to `config.ron` (serde + RON, `#[serde(default)]` so partial files load; directory from the `directories` crate, overridable with `PHOTON_CONFIG_DIR`). Settings are rewritten only when they actually change, so hand edits survive while nothing is touched.
 
-Viewer concurrency is raw `std::thread` + `mpsc`; the batch engine additionally uses `rayon`'s `par_iter`. The previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching), `rayon` (batch parallelism), `half` (f16/HDR buffers), `jiff` (dates in Image Information), `humansize` (file sizes), `kamadak-exif` (Exif tag panel), `pollster` (dev-only; drives the async wgpu calls in the GPU tests).
+Viewer concurrency is raw `std::thread` + `mpsc`; the batch engine additionally uses `rayon`'s `par_iter`. The previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching), `rayon` (batch parallelism), `half` (f16/HDR buffers), `jiff` (dates in Image Information), `humansize` (file sizes), `kamadak-exif` (Exif tag panel), `pollster` (dev-only; drives the async wgpu calls in the GPU tests). `egui-winit` is a **vendored fork** (`vendor/egui-winit`, wired via `[patch.crates-io]`) carrying a one-hunk fix so Ctrl+V reaches the app when the clipboard has no text (image paste); see `VENDOR_NOTES.md`.
 
 ### GPU / render pipeline
 
@@ -178,15 +178,15 @@ Defined in `src/main.rs` via `egui::KeyboardShortcut` and `Modifiers::COMMAND` (
 
 The File/Edit/View menu bar (in `ui/toolbar.rs`) is driven by the registry: every `Command` is listed under its `MenuGroup` with its `command_enabled()` state, so it is the discoverable home for the edit ops (rotate/flip/crop/grayscale/negative), Convert…, and the runtime-only View actions (Lock Zoom, Fit Window to Image, Centre Window, Zoom to Desktop) that are not registry commands.
 
-GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/`Paste`/`Cut` at the input layer — the key events never exist on winit platforms. Copy/paste are therefore dispatched from those command events (plus key-shortcut fallbacks) in `take_shortcut_actions` (`src/main.rs`), which has synthetic-input tests. If a TextEdit is ever added, it will not see Ctrl+C/V — handle it there deliberately.
+GOTCHA: egui-winit (vendored — see `VENDOR_NOTES.md`) rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/`Paste`/`Cut` at the input layer; when the text read succeeds, the key event never exists. Copy/paste are therefore dispatched from those command events, with the registry's raw-key fallback rows in `take_commands` (`src/input.rs`) covering backends that don't rewrite. The vendored patch is what makes that fallback work for images: with no text on the clipboard, Ctrl+V falls through as a plain key event (upstream swallows it unconditionally), so Photon can read the clipboard image itself. If a TextEdit is ever added, it will not see Ctrl+V for text — handle it there deliberately.
 
 ---
 
 ## 5. Testing
 
-The suite is **165 unit tests** across sixteen files (all pure-CPU except the GPU harness in `render.rs`):
+The suite lives beside the code it tests (all pure-CPU except the GPU harness in `render.rs`):
 
-- `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, Copy/Paste carry their raw-key fallbacks, and `command_enabled()` gating (undo/redo/crop/edit/Save disabled without history/selection/image).
+- `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, Copy/Paste carry their raw-key fallbacks, `command_enabled()` gating (undo/redo/crop/edit/Save disabled without history/selection/image), and the Image Information command toggling the window.
 - `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; a no-Exif decode is byte-identical; an Exif `orientation=6` PNG fixture decodes with swapped dimensions and a rotation permutation (Roadmap §3); the native-BC path (compressed kept with `allow_bc` incl. byte length + colour space, RGBA8 without it, oversize fallback, legacy DXT1 → `Bc1`/`Srgb`, DXGI BC5 → `Bc5Unorm`/`Linear`); the float path (a `R32G32B32A32_Float` DDS round-trips exact `f16` values incl. >1.0, BC6H decodes to `Float16`, `allow_bc`/`max_dim` don't gate it); the colour-space/DXGI/f16 mapping helpers; plus `DecodeError::is_unsupported_format` classification (Roadmap §8).
 - `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, `FitWindow` (don't / enlarge-if-smaller / always) with monitor clamping, `centered_window_pos`, `zoom_to_desktop`, adaptive `zoom_limits`, zero-size guards, `clamp_to_limits`, `zoom_to_fill`, `ZoomLock`, plus the pixel-readout helpers (`image_pixel_at`, `html_hex`) and `tile_offsets`. Pure.
@@ -205,7 +205,7 @@ The suite is **165 unit tests** across sixteen files (all pure-CPU except the GP
 
 There is a **headless GPU test harness** now (`src/render.rs`, `#[cfg(test)] mod gpu_tests`): `headless_device()` acquires a headless Vulkan/fallback adapter and returns `None` when unavailable, so GPU tests **skip cleanly** on a machine without one. Use that pattern for any new wgpu code (compute filters, render-pass changes) — do not unit-test code that needs an *egui* context, but wgpu code is fair game via the harness. When adding behavior to pure, side-effect-free functions (path filtering, crop math, encoder wrappers, cache-hit state transitions, config parsing), add `#[cfg(test)]` unit tests next to the code, matching the existing pattern.
 
-Run tests with `cargo test --release` (debug builds are slow to compile and run here).
+Run tests with `cargo test --release` (debug builds are slow to compile and run here). Do not record a running test count anywhere in the docs — it churns on every change; describe coverage qualitatively.
 
 ---
 
@@ -258,7 +258,7 @@ Many extra files in the repo are **ignored by git** (see `.gitignore`) and are A
 
 1. Read `CLAUDE.md` for behavioral rules.
 2. `cargo build --release` to confirm the tree compiles (expect zero warnings, no errors).
-3. `cargo test --release` to confirm the 165 unit tests pass.
+3. `cargo test --release` to confirm the unit tests pass.
 4. For runtime work, `cargo run --release -- /some/folder/of/images` to launch.
 
 Note for agents running inside the ZCode desktop app: the sandbox rewrites `argv[0]`, which breaks rustup's proxy dispatch — invoke toolchain commands as `env cargo build --release` etc.

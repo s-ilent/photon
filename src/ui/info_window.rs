@@ -18,6 +18,7 @@ impl PhotonApp {
         let mut refresh = false;
         egui::Window::new("Image Information")
             .default_width(420.0)
+            .max_width(520.0)
             .open(&mut open)
             .show(ctx, |ui| refresh = info_window_body(ui, self));
         self.info_open = open;
@@ -102,13 +103,14 @@ fn info_window_body(ui: &mut egui::Ui, app: &PhotonApp) -> bool {
         .spacing([12.0, 4.0])
         .show(ui, |ui| {
             ui.label("File:");
-            ui.label(
+            truncated(
+                ui,
                 path.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string()),
             );
             ui.label("Path:");
-            ui.label(path.display().to_string());
+            truncated(ui, path.display().to_string());
             ui.label("Format:");
             ui.label(&info.format);
             ui.label("Size:");
@@ -181,7 +183,7 @@ fn info_window_body(ui: &mut egui::Ui, app: &PhotonApp) -> bool {
                                 for row in &rows {
                                     ui.label(row.ifd);
                                     ui.label(&row.tag);
-                                    ui.label(&row.value);
+                                    truncated(ui, &row.value);
                                     ui.end_row();
                                 }
                             });
@@ -235,6 +237,12 @@ fn present(bytes: Option<usize>) -> String {
         Some(n) => format!("present ({n} bytes)"),
         None => "none".to_string(),
     }
+}
+
+/// A value that is cut off at the window edge instead of widening it; egui
+/// shows the full text on hover when it is elided.
+fn truncated(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) {
+    ui.add(egui::Label::new(text).truncate());
 }
 
 fn refresh_button(ui: &mut egui::Ui) -> bool {

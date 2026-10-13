@@ -196,6 +196,11 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
       data-control path functions; still worth one manual cross-app test
       (Photon → GIMP/Krita and back) to confirm other apps accept our image
       MIME offers. Fallbacks if broken: XWayland or wl-clipboard-rs.
+      2026-10-14: Ctrl+V with an image clipboard was dead — egui-winit reads the
+      clipboard as *text* and returns before emitting any event when that read
+      fails, so neither the Paste event nor the key event existed. Fixed by the
+      vendored `egui-winit` patch (`VENDOR_NOTES.md`); Ctrl+V → paste now needs
+      one more manual confirmation.
 - [ ] **Generated fixture set for the Image Information window** (§9) —
       deferred 2026-10-14: manual passes use the user's own images, so this is
       backlog. A generated folder with known header values (plain/palette/16-bit
@@ -203,8 +208,10 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
       against exact expected values. Generator kept at
       `scratch/make_info_fixtures.py` (PIL + numpy); it encodes the gotchas —
       Exif rationals need `PIL.TiffImagePlugin.IFDRational` (`fractions.Fraction`
-      silently serialises as UNDEFINED), and a `.hdr` needs new-style RLE
-      scanlines. Still missing: cubemap/array DDS, which want a throwaway Rust
+      silently serialises as UNDEFINED), and a `.hdr` needs new-style RLE with
+      literal-run count bytes as-is (a byte above 128 means a repeat run; the
+      inverse convention fails with `Wrong length of decoded scanline`). Still
+      missing: cubemap/array DDS, which want a throwaway Rust
       example built on `image_dds::ddsfile` (mirroring the in-memory builders in
       the `image_loader.rs` tests); PIL's `iptc=` kwarg did not emit an APP13
       block, so the fixture's IPTC row reads "none".
@@ -224,6 +231,10 @@ the escalation path if a picked crate needs a fix upstream lacks.
       stops coping). Vetted-but-inapplicable: `egui_dock`, `egui-arbor`
       (revisit for the texture sidebar), `egui_plot`, `egui_code_editor`,
       `egui_field_editor`, `ab_glyph`, `mimalloc`.
+- [x] **`egui-winit` vendored fork** (2026-10-14) — `vendor/egui-winit` behind
+      `[patch.crates-io]`, one hunk: Ctrl+V with no text on the clipboard falls
+      through as a key event so image paste reaches the app. The
+      `VENDOR_NOTES.md` pattern; upgrade steps live there.
 - [ ] **Roadmap: reintroduce removed deps where they earn their keep** —
       `tokio` (async walk/IO, file watching substrate), `thiserror` (typed
       loader errors; first job: replace the `"Failed to decode"` prefix
@@ -237,6 +248,23 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-14 (Image Information follow-up: layout, toggle, Ctrl+V, HDR fixture)
+- **Info window layout bounded** — `Window::max_width(520)` plus truncated value
+  labels (file name, path, Exif values); egui shows the elided full text on
+  hover. `Ctrl+I` now **toggles** the window (was open-only) and the toolbar
+  gains an info button next to the Settings gear; the toggle has a regression
+  test.
+- **Ctrl+V on an image clipboard** never reached the app: egui-winit reads the
+  clipboard as *text* and `return`s before emitting anything when that read
+  fails. Fixed by **vendoring `egui-winit`** (`vendor/`, `[patch.crates-io]`,
+  one hunk: fall through to the key event when there is no text) — the
+  registry's raw-key fallback then fires and Photon reads the image itself.
+  `VENDOR_NOTES.md` documents the hunk and the upgrade steps.
+- **Manual-test fixtures**: the generated `.hdr` was invalid — new-style RLE
+  literal runs use the count byte as-is (a byte above 128 is a repeat run), not
+  `128 + n`; regenerated and verified through the loader's exact decode path.
+  The generator stays at `scratch/make_info_fixtures.py`.
 
 ### 2026-10-13 (Image Information + Exif panel, Roadmap §9)
 - **`app/image_info.rs`**: a headers-only probe — one decoder parse yields

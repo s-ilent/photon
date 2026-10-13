@@ -128,7 +128,7 @@ with open(f"{OUT}/05_hdr.hdr", "wb") as f:
             i = 0
             while i < len(vals):
                 n = min(128, len(vals) - i)
-                f.write(bytes([128 + n]))  # literal run of n
+                f.write(bytes([n]))  # literal run of n (a byte > 128 means a repeat run)
                 f.write(vals[i : i + n])
                 i += n
 
