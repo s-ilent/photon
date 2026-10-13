@@ -15,7 +15,7 @@ impl PhotonApp {
                         ui.add(overlay_label("No images loaded.", theme::SUBDUED));
                     }
                     StatusOverlay::Loading(msg) => {
-                        ui.add(egui::widgets::Spinner::new().size(32.0));
+                        ui.add(egui::widgets::Spinner::new().size(32.0).color(theme::FG));
                         ui.add_space(8.0);
                         ui.add(overlay_label(&msg, theme::FG));
                     }

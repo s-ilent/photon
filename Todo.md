@@ -307,6 +307,33 @@ the escalation path if a picked crate needs a fix upstream lacks.
 
 ## Done
 
+### 2026-10-14 (tool-window layout pass: render-first, invisible text root-caused)
+- **Render checks** (`ui/render_checks.rs`): `egui_kittest` draws the Batch
+  Convert and Preferences bodies at their real window sizes under the app
+  fonts and theme and writes PNGs to `target/snapshots/`
+  (`cargo test --release render_`). Layout changes are accepted by reading
+  those images. Renders serialize on a lock — parallel harnesses segfault the
+  wgpu driver intermittently (0/5 vs 3/5 runs).
+- **Why the table headers were invisible**: `ui.strong` paints in
+  `Visuals::strong_text_color()` = `widgets.active.text_color()`, and the
+  Dracula theme needs the active text dark over the purple pressed fill — so
+  headers painted in the panel background colour all along. Headers now use an
+  explicit subdued colour (`batch_window::header_label`); the loading
+  overlay's uncoloured `Spinner` fell back to the same colour and is fixed
+  too. Noted at the theme's `active.fg_stroke` line.
+- **Stray vertical lines**: `egui_extras` paints a line at every resizable
+  column boundary every frame (not only on hover); hidden at rest with a
+  scoped `widgets.noninteractive.bg_stroke = Stroke::NONE`, hover/drag
+  strokes untouched.
+- **Batch Convert**: the file table absorbs the remaining height (internal
+  scroll); the stack below floors the table at `FILE_AREA_MIN = 140`; the
+  default window is now 640×560 so the whole surface (recipe included) shows
+  without scrolling — smaller windows scroll the stack, the Run row pinned.
+- **Preferences**: the master-detail row takes the full window height
+  (`with_layout`, not `horizontal`), the detail pane is
+  `auto_shrink([false, false])`, and the Shortcuts hint wraps instead of
+  clipping at the right edge.
+
 ### 2026-10-14 (chainable CLI + key rebinding, Roadmap §10)
 - **`--` command line** (`app/cli.rs`): `photon [--switch [arg]]... files...` —
   the op chain applies left-to-right through the same `ImageOp` text form as

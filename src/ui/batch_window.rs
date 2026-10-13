@@ -279,7 +279,9 @@ pub(crate) fn show(ctx: &egui::Context, batch: &mut BatchState, images: &[PathBu
     }
     let mut builder = egui::ViewportBuilder::default()
         .with_title("Batch Convert")
-        .with_inner_size([560.0, 480.0])
+        // Default shows the whole surface (file table, options, operations,
+        // recipe, Run) without scrolling; smaller sizes scroll the stack.
+        .with_inner_size([640.0, 560.0])
         .with_min_inner_size([380.0, 260.0])
         .with_active(true);
     if ctx.embed_viewports() {
@@ -310,79 +312,94 @@ pub(crate) fn show(ctx: &egui::Context, batch: &mut BatchState, images: &[PathBu
 /// The window body. A free function over the batch state and the app's current
 /// file list, so the viewport closure captures disjoint fields of `PhotonApp`
 /// rather than the whole app.
+///
+/// The file table is the flexible element: it takes the window height minus
+/// the compact control stack below it, and scrolls internally. The stack's
+/// natural height does not depend on the table, so the table is sized with the
+/// height measured on the previous frame (egui memory); the value settles once
+/// and is stable from then on. The stack is laid out in a rect that reaches
+/// past the window bottom, so its own measurement can never be squeezed by the
+/// space the table left — which is what would make the two sizes feed back
+/// into each other. When a short window cannot show the stack alongside the
+/// table's share, the stack scrolls instead.
 fn batch_window_body(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBuf]) {
-    file_list_section(ui, batch, images);
-    ui.separator();
-    output_section(ui, batch);
-    ui.separator();
-    operations_section(ui, batch);
-    ui.separator();
-    recipe_section(ui, batch);
-    run_section(ui, batch);
+    let lower_id = egui::Id::new("batch_lower_height");
+    let full = ui.available_rect_before_wrap();
+    let lower_last = ui
+        .ctx()
+        .memory(|m| m.data.get_temp::<f32>(lower_id).unwrap_or(360.0));
+
+    let table_bottom = (full.bottom() - lower_last).max(full.top());
+    let table_rect = egui::Rect::from_min_max(full.min, egui::pos2(full.right(), table_bottom));
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id_salt("batch_files")
+            .max_rect(table_rect),
+        |ui| file_list_section(ui, batch, images),
+    );
+
+    // The separator plus the Run row the stack always carries below its
+    // scrollable part.
+    let stack_reserve = ui.spacing().item_spacing.y
+        + 6.0
+        + ui.spacing().interact_size.y
+        + ui.spacing().item_spacing.y;
+    let stack_rect = egui::Rect::from_min_max(
+        egui::pos2(full.left(), table_rect.bottom()),
+        egui::pos2(full.right(), full.bottom() + 4000.0),
+    );
+    let stack = ui.scope_builder(
+        egui::UiBuilder::new()
+            .id_salt("batch_lower")
+            .max_rect(stack_rect),
+        |ui| {
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .max_height((full.height() - FILE_AREA_MIN - stack_reserve).max(0.0))
+                .show(ui, |ui| {
+                    output_section(ui, batch);
+                    ui.separator();
+                    operations_section(ui, batch);
+                    ui.separator();
+                    recipe_section(ui, batch);
+                });
+            run_section(ui, batch);
+        },
+    );
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(lower_id, stack.response.rect.height()));
 }
 
-/// The file list table, with the add/clear actions and the count below it.
+/// Height the file area keeps for itself even in a short window, so the table
+/// keeps a usable viewport while the control stack scrolls instead. Sized so
+/// the stack's ~275 pt of content still shows whole (recipe included) at the
+/// default window size.
+const FILE_AREA_MIN: f32 = 140.0;
+
+/// egui_extras paints a line at every resizable column boundary every frame,
+/// in `widgets.noninteractive.bg_stroke` — with the pointer elsewhere it is a
+/// stray line cutting through the header and the rows. Make it invisible at
+/// rest; the hovered and dragged strokes are different states, so grabbing a
+/// boundary still draws it.
+fn hide_column_dividers(ui: &mut egui::Ui) {
+    ui.style_mut().visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
+}
+
+/// Table header text, in the subdued tone. Not `ui.strong`: that resolves
+/// through `Visuals::strong_text_color()` = `widgets.active.text_color()`,
+/// which the Dracula theme needs dark for the purple pressed fill — the same
+/// colour as the panel, so strong text is invisible.
+fn header_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).color(theme::SUBDUED));
+}
+
+/// The file list table, with the add/clear actions above it and the count.
+/// The actions come first so the table can simply fill the height that is
+/// left — no estimates.
 fn file_list_section(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBuf]) {
     let width = ui.available_width();
     let mut remove: Option<usize> = None;
-    TableBuilder::new(ui)
-        .id_salt("batch_file_list")
-        .striped(true)
-        .resizable(true)
-        .column(Column::initial(width * 0.28).resizable(true).clip(true))
-        .column(Column::remainder().clip(true))
-        .column(Column::exact(26.0).resizable(false).clip(true))
-        .column(Column::exact(26.0).resizable(false).clip(true))
-        .max_scroll_height(140.0)
-        .header(20.0, |mut header| {
-            header.col(|ui| {
-                ui.strong("Filename");
-            });
-            header.col(|ui| {
-                ui.strong("Path");
-            });
-            header.col(|_ui| {});
-            header.col(|_ui| {});
-        })
-        .body(|body| {
-            body.rows(22.0, batch.files.len(), |mut row| {
-                let index = row.index();
-                let path = &batch.files[index];
-                row.col(|ui| {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path.display().to_string());
-                    ui.label(name);
-                });
-                row.col(|ui| {
-                    let parent = path
-                        .parent()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default();
-                    ui.label(parent).on_hover_text(path.display().to_string());
-                });
-                row.col(|ui| {
-                    let status = batch.statuses.get(index).unwrap_or(&None);
-                    let (icon, color) = status_icon(status);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(icon).color(color))
-                            .on_hover_text(status_label(status));
-                    });
-                });
-                row.col(|ui| {
-                    if ui.small_button(icons::X).clicked() {
-                        remove = Some(index);
-                    }
-                });
-            });
-        });
-    if let Some(index) = remove {
-        batch.files.remove(index);
-        if index < batch.statuses.len() {
-            batch.statuses.remove(index);
-        }
-    }
 
     ui.horizontal(|ui| {
         if ui.button("Add files\u{2026}").clicked() {
@@ -404,6 +421,75 @@ fn file_list_section(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBu
             ui.label(format!("{} file(s)", batch.files.len()));
         });
     });
+
+    // Fill the remaining height and scroll internally, so a large window gets
+    // a tall table instead of dead space below the content.
+    let table_height = ui.available_height().max(40.0);
+    ui.scope(|ui| {
+        hide_column_dividers(ui);
+        TableBuilder::new(ui)
+            .id_salt("batch_file_list")
+            .striped(true)
+            .resizable(true)
+            .column(Column::initial(width * 0.28).resizable(true).clip(true))
+            // Non-resizable remainder columns re-fit every frame; a resizable one
+            // keeps its first-frame width and overflows (or strands) at other
+            // window sizes.
+            .column(Column::remainder().resizable(false).clip(true))
+            .column(Column::exact(26.0).resizable(false).clip(true))
+            .column(Column::exact(26.0).resizable(false).clip(true))
+            .max_scroll_height(table_height)
+            .auto_shrink([false, false])
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    header_label(ui, "Filename");
+                });
+                header.col(|ui| {
+                    header_label(ui, "Path");
+                });
+                header.col(|_ui| {});
+                header.col(|_ui| {});
+            })
+            .body(|body| {
+                body.rows(22.0, batch.files.len(), |mut row| {
+                    let index = row.index();
+                    let path = &batch.files[index];
+                    row.col(|ui| {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| path.display().to_string());
+                        ui.label(name);
+                    });
+                    row.col(|ui| {
+                        let parent = path
+                            .parent()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default();
+                        ui.label(parent).on_hover_text(path.display().to_string());
+                    });
+                    row.col(|ui| {
+                        let status = batch.statuses.get(index).unwrap_or(&None);
+                        let (icon, color) = status_icon(status);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new(icon).color(color))
+                                .on_hover_text(status_label(status));
+                        });
+                    });
+                    row.col(|ui| {
+                        if ui.small_button(icons::X).clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                });
+            });
+    });
+    if let Some(index) = remove {
+        batch.files.remove(index);
+        if index < batch.statuses.len() {
+            batch.statuses.remove(index);
+        }
+    }
 }
 fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     egui::Grid::new("batch_output")
@@ -492,47 +578,50 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
 
     let width = ui.available_width();
     let mut remove_op: Option<usize> = None;
-    TableBuilder::new(ui)
-        .id_salt("batch_operations")
-        .striped(true)
-        .resizable(true)
-        .column(Column::exact(26.0).resizable(false).clip(true))
-        .column(Column::initial(width * 0.30).resizable(true).clip(true))
-        .column(Column::remainder().clip(true))
-        .column(Column::exact(26.0).resizable(false).clip(true))
-        .max_scroll_height(120.0)
-        .header(20.0, |mut header| {
-            header.col(|ui| {
-                ui.strong("#");
-            });
-            header.col(|ui| {
-                ui.strong("Operation");
-            });
-            header.col(|ui| {
-                ui.strong("Switch");
-            });
-            header.col(|_ui| {});
-        })
-        .body(|body| {
-            body.rows(22.0, batch.operations.len(), |mut row| {
-                let index = row.index();
-                let op = &batch.operations[index];
-                row.col(|ui| {
-                    ui.label(format!("{}.", index + 1));
+    ui.scope(|ui| {
+        hide_column_dividers(ui);
+        TableBuilder::new(ui)
+            .id_salt("batch_operations")
+            .striped(true)
+            .resizable(true)
+            .column(Column::exact(26.0).resizable(false).clip(true))
+            .column(Column::initial(width * 0.30).resizable(true).clip(true))
+            .column(Column::remainder().resizable(false).clip(true))
+            .column(Column::exact(26.0).resizable(false).clip(true))
+            .max_scroll_height(120.0)
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    header_label(ui, "#");
                 });
-                row.col(|ui| {
-                    ui.label(operation_label(op));
+                header.col(|ui| {
+                    header_label(ui, "Operation");
                 });
-                row.col(|ui| {
-                    ui.monospace(op.to_cli());
+                header.col(|ui| {
+                    header_label(ui, "Switch");
                 });
-                row.col(|ui| {
-                    if ui.small_button(icons::X).clicked() {
-                        remove_op = Some(index);
-                    }
+                header.col(|_ui| {});
+            })
+            .body(|body| {
+                body.rows(22.0, batch.operations.len(), |mut row| {
+                    let index = row.index();
+                    let op = &batch.operations[index];
+                    row.col(|ui| {
+                        ui.label(format!("{}.", index + 1));
+                    });
+                    row.col(|ui| {
+                        ui.label(operation_label(op));
+                    });
+                    row.col(|ui| {
+                        ui.monospace(op.to_cli());
+                    });
+                    row.col(|ui| {
+                        if ui.small_button(icons::X).clicked() {
+                            remove_op = Some(index);
+                        }
+                    });
                 });
             });
-        });
+    });
     if let Some(index) = remove_op {
         batch.operations.remove(index);
         sync_recipe_text(batch);
@@ -555,17 +644,24 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                             ui.selectable_value(&mut batch.pending_op, index, option.label());
                         }
                     });
-                if ui.add_enabled(
-                    choice
-                        .to_operation(batch.resize_width, batch.resize_height, batch.resize_filter)
-                        .is_some(),
-                    egui::Button::new("Add step"),
-                )
-                .clicked()
+                if ui
+                    .add_enabled(
+                        choice
+                            .to_operation(
+                                batch.resize_width,
+                                batch.resize_height,
+                                batch.resize_filter,
+                            )
+                            .is_some(),
+                        egui::Button::new("Add step"),
+                    )
+                    .clicked()
                 {
-                    if let Some(op) = choice
-                        .to_operation(batch.resize_width, batch.resize_height, batch.resize_filter)
-                    {
+                    if let Some(op) = choice.to_operation(
+                        batch.resize_width,
+                        batch.resize_height,
+                        batch.resize_filter,
+                    ) {
                         batch.operations.push(op);
                         sync_recipe_text(batch);
                     }
@@ -643,7 +739,6 @@ fn recipe_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     }
 }
 
-
 fn run_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     let can_run = !batch.running && !batch.files.is_empty();
     ui.horizontal(|ui| {
@@ -676,6 +771,20 @@ fn run_section(ui: &mut egui::Ui, batch: &mut BatchState) {
         ui.add(egui::ProgressBar::new(fraction).show_percentage());
     }
 }
+/// Render-check entry (see `ui::render_checks`): the body wrapped in the same
+/// `CentralPanel` the native viewport builds, so the harness sees identical
+/// geometry (panel margin included).
+#[cfg(test)]
+pub(crate) fn render_check_body(
+    ui: &mut egui::Ui,
+    batch: &mut BatchState,
+    images: &[std::path::PathBuf],
+) {
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        batch_window_body(ui, batch, images);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -786,7 +895,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn operation_choice_labels_are_nonempty_and_distinct() {
         let mut seen = std::collections::HashSet::new();
@@ -801,7 +909,9 @@ mod tests {
 
 #[cfg(test)]
 mod table_probe {
-    //! Temporary probe: do the table headers actually paint?
+    //! The file table must emit its header and row text into the paint list.
+    //! No GPU: this guards that the table builds at all; appearance is the
+    //! render checks' job (`ui::render_checks`).
     use super::*;
 
     #[test]
@@ -827,7 +937,6 @@ mod table_probe {
                 }
             }
             let joined = texts.join(" | ");
-            println!("frame {frame} text shapes: {joined}");
             if frame == 1 {
                 assert!(joined.contains("Filename"), "header text painted: {joined}");
                 assert!(joined.contains("Path"), "header text painted: {joined}");

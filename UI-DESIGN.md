@@ -122,6 +122,15 @@ Placement rule for a new command — ask what it touches:
 ## 8. Verification
 
 - Pure presentation helpers (geometry, label forms, section flags) get unit
-  tests next to the code; egui-context code is not unit-tested.
+  tests next to the code.
+- egui-context surfaces are checked by **rendering** them: `ui/render_checks.rs`
+  draws the tool-window bodies through `egui_kittest` at their real window
+  sizes, with the app fonts and theme and the same panel wrap the viewport
+  uses, and saves PNGs to `target/snapshots/` (`cargo test --release render_`).
+  Read the images before accepting a layout change — it is not done when it
+  compiles.
+- Layout rules that cost a bug stay written down here: text in `ui.strong`
+  takes `strong_text_color`, which the theme derives from the pressed-fill
+  colour — set an explicit colour for header text.
 - User-visible changes ship with a manual click-through brief (exact values +
   the release binary).

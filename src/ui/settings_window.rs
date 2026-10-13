@@ -53,7 +53,9 @@ impl app::PhotonApp {
     fn preferences_body(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.preferences_page = self.preferences_page.min(PAGES.len() - 1);
-        ui.horizontal(|ui| {
+        // A plain `horizontal` reserves one interact-row of height; the
+        // master-detail row needs the full window height.
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             // Master: the category column.
             ui.allocate_ui(egui::vec2(120.0, ui.available_height()), |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -68,12 +70,22 @@ impl app::PhotonApp {
                 });
             });
             ui.separator();
-            // Detail: the selected page.
-            egui::ScrollArea::vertical().show(ui, |ui| match self.preferences_page {
-                0 => self.general_page(ui, &ctx),
-                1 => self.view_page(ui),
-                _ => self.shortcuts_page(ui, &ctx),
-            });
+            // Detail: the selected page. Fills the window height (the
+            // shrink-to-content default collapses the pane to a sliver while
+            // the grid inside is still measuring itself).
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    // The scroll content inherits the row's horizontal
+                    // layout; the pages are vertical forms.
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        match self.preferences_page {
+                            0 => self.general_page(ui, &ctx),
+                            1 => self.view_page(ui),
+                            _ => self.shortcuts_page(ui, &ctx),
+                        }
+                    });
+                });
         });
     }
 
@@ -95,8 +107,8 @@ impl app::PhotonApp {
                 ui.end_row();
 
                 grid_label(ui, "Font size:");
-                let font_size = ui
-                    .add(egui::Slider::new(&mut self.settings.font_size, 10.0..=60.0));
+                let font_size =
+                    ui.add(egui::Slider::new(&mut self.settings.font_size, 10.0..=60.0));
                 if font_size.changed() && self.settings.font_size != self.last_font_size {
                     self.last_font_size = self.settings.font_size;
                     app::PhotonApp::apply_theme(
@@ -173,11 +185,7 @@ impl app::PhotonApp {
                             app::view::FitWindow::EnlargeIfSmaller,
                             app::view::FitWindow::AlwaysResize,
                         ] {
-                            ui.selectable_value(
-                                &mut self.settings.fit_window,
-                                mode,
-                                mode.label(),
-                            );
+                            ui.selectable_value(&mut self.settings.fit_window, mode, mode.label());
                         }
                     });
                 ui.end_row();
@@ -191,11 +199,7 @@ impl app::PhotonApp {
                             app::ZoomReset::DimensionChange,
                             app::ZoomReset::Never,
                         ] {
-                            ui.selectable_value(
-                                &mut self.settings.zoom_reset,
-                                mode,
-                                mode.label(),
-                            );
+                            ui.selectable_value(&mut self.settings.zoom_reset, mode, mode.label());
                         }
                     });
                 ui.end_row();
@@ -233,7 +237,10 @@ impl app::PhotonApp {
                 ui.end_row();
 
                 grid_label(ui, "Repeat:");
-                ui.checkbox(&mut self.settings.tile_repeat, "Tile-repeat (seamless) view");
+                ui.checkbox(
+                    &mut self.settings.tile_repeat,
+                    "Tile-repeat (seamless) view",
+                );
                 ui.end_row();
 
                 grid_label(ui, "HDR exposure (EV):");
@@ -248,8 +255,13 @@ impl app::PhotonApp {
 
     /// The per-command shortcut table with its capture flow.
     fn shortcuts_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.label(
-            "Copy and Paste always answer Ctrl+C/V; rebinding adds or removes an extra key.",
+        // Wrap explicitly: the hint must never widen the scroll content and
+        // clip at the window edge.
+        ui.add(
+            egui::Label::new(
+                "Copy and Paste always answer Ctrl+C/V; rebinding adds or removes an extra key.",
+            )
+            .wrap(),
         );
 
         // While a capture is armed, it owns the input: main.rs pauses
@@ -323,10 +335,10 @@ impl app::PhotonApp {
                 if self.binding_capture == Some(command) {
                     ui.label("press a key… (Esc cancels)");
                 } else {
-                    let binding = self
-                        .bindings
-                        .iter()
-                        .find_map(|(c, s)| if *c == command { *s } else { None });
+                    let binding =
+                        self.bindings
+                            .iter()
+                            .find_map(|(c, s)| if *c == command { *s } else { None });
                     ui.label(
                         binding
                             .map(commands::shortcut_to_text)
@@ -355,5 +367,14 @@ impl app::PhotonApp {
 fn grid_label(ui: &mut egui::Ui, text: &str) {
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.label(text);
+    });
+}
+
+/// Render-check entry (see `ui::render_checks`), wrapped the same way the
+/// native viewport wraps the body.
+#[cfg(test)]
+pub(crate) fn render_check_preferences_body(app: &mut app::PhotonApp, ui: &mut egui::Ui) {
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        app.preferences_body(ui);
     });
 }

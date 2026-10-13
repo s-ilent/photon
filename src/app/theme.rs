@@ -53,6 +53,10 @@ impl PhotonApp {
 
         visuals.widgets.active.weak_bg_fill = PURPLE;
         visuals.widgets.active.bg_fill = PURPLE;
+        // Dark text over the purple pressed fill. egui derives
+        // `strong_text_color()` from this colour, so `ui.strong` text and an
+        // uncoloured `Spinner` would paint in BG; both set a colour explicitly
+        // (see `ui::batch_window::header_label`, `ui::overlay`).
         visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5_f32, BG);
 
         // Open menu/combo background.
