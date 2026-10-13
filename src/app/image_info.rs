@@ -54,7 +54,8 @@ pub(crate) fn probe(path: &Path) -> Result<ImageInfo, String> {
         return probe_dds(path, file_size, modified);
     }
 
-    let file = std::fs::File::open(path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
     let reader = ::image::ImageReader::new(BufReader::new(file))
         .with_guessed_format()
         .map_err(|e| format!("cannot guess the format of {}: {e}", path.display()))?;
@@ -73,9 +74,18 @@ pub(crate) fn probe(path: &Path) -> Result<ImageInfo, String> {
     // The raw blocks are header parses; keep errors per-field so one odd chunk
     // cannot blank the whole window.
     let exif = decoder.exif_metadata().map_err(|e| e.to_string())?;
-    let icc = decoder.icc_profile().map_err(|e| e.to_string())?.map(|b| b.len());
-    let xmp = decoder.xmp_metadata().map_err(|e| e.to_string())?.map(|b| b.len());
-    let iptc = decoder.iptc_metadata().map_err(|e| e.to_string())?.map(|b| b.len());
+    let icc = decoder
+        .icc_profile()
+        .map_err(|e| e.to_string())?
+        .map(|b| b.len());
+    let xmp = decoder
+        .xmp_metadata()
+        .map_err(|e| e.to_string())?
+        .map(|b| b.len());
+    let iptc = decoder
+        .iptc_metadata()
+        .map_err(|e| e.to_string())?
+        .map(|b| b.len());
 
     Ok(ImageInfo {
         format,
@@ -96,10 +106,15 @@ pub(crate) fn probe(path: &Path) -> Result<ImageInfo, String> {
 /// DDS files carry no Exif/ICC/XMP through `image_dds`; the DXGI header gives
 /// the dimensions and the compression family. [`crate::app::image_info`] tests
 /// pin the label mapping.
-fn probe_dds(path: &Path, file_size: u64, modified: Option<SystemTime>) -> Result<ImageInfo, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-    let dds =
-        image_dds::ddsfile::Dds::read(file).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+fn probe_dds(
+    path: &Path,
+    file_size: u64,
+    modified: Option<SystemTime>,
+) -> Result<ImageInfo, String> {
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    let dds = image_dds::ddsfile::Dds::read(file)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let dxgi = dds.get_dxgi_format();
     let (width, height) = (dds.get_width(), dds.get_height());
     let compression = dxgi.map(dds_compression_label);
@@ -107,7 +122,9 @@ fn probe_dds(path: &Path, file_size: u64, modified: Option<SystemTime>) -> Resul
         format: "Dds".to_string(),
         width,
         height,
-        colour_depth: dxgi.map(dds_colour_depth).unwrap_or_else(|| "DDS".to_string()),
+        colour_depth: dxgi
+            .map(dds_colour_depth)
+            .unwrap_or_else(|| "DDS".to_string()),
         alpha: dxgi.is_some_and(dds_has_alpha),
         exif: None,
         icc: None,
@@ -207,7 +224,11 @@ fn colour_depth_label(original: ExtendedColorType) -> String {
 fn has_alpha(color: ColorType) -> bool {
     matches!(
         color,
-        ColorType::La8 | ColorType::Rgba8 | ColorType::La16 | ColorType::Rgba16 | ColorType::Rgba32F
+        ColorType::La8
+            | ColorType::Rgba8
+            | ColorType::La16
+            | ColorType::Rgba16
+            | ColorType::Rgba32F
     )
 }
 
@@ -298,7 +319,10 @@ mod tests {
     fn probe_fails_cleanly_on_a_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let err = probe(&dir.path().join("gone.png")).expect_err("must fail");
-        assert!(err.contains("cannot stat") || err.contains("cannot open"), "{err}");
+        assert!(
+            err.contains("cannot stat") || err.contains("cannot open"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -358,7 +382,7 @@ mod tests {
     /// The DDS branch across the compression families the renderer supports.
     #[test]
     fn probe_dds_reports_each_compression_family() {
-        use image_dds::ddsfile::{D3D10ResourceDimension, DxgiFormat, Dds, NewDxgiParams};
+        use image_dds::ddsfile::{D3D10ResourceDimension, Dds, DxgiFormat, NewDxgiParams};
 
         let cases = [
             (DxgiFormat::BC1_UNorm, "BC1 (DXT1)", false),
@@ -368,7 +392,9 @@ mod tests {
         ];
         let dir = tempfile::tempdir().expect("tempdir");
         for (format, label, alpha) in cases {
-            let path = dir.path().join(format!("{label}.dds").replace(['(', ')', ' '], "_"));
+            let path = dir
+                .path()
+                .join(format!("{label}.dds").replace(['(', ')', ' '], "_"));
             let mut dds = Dds::new_dxgi(NewDxgiParams {
                 height: 8,
                 width: 8,
@@ -401,7 +427,10 @@ mod tests {
         assert_eq!(colour_depth_label(E::Rgba16), "RGBA, 16-bit/channel");
         assert_eq!(colour_depth_label(E::Rgba32F), "RGBA, 32-bit float");
         assert_eq!(colour_depth_label(E::L8), "Grayscale, 8-bit");
-        assert_eq!(colour_depth_label(E::Unknown(8)), "8-bit (indexed palette or unknown layout)");
+        assert_eq!(
+            colour_depth_label(E::Unknown(8)),
+            "8-bit (indexed palette or unknown layout)"
+        );
     }
 
     #[test]

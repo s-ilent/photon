@@ -278,7 +278,6 @@ mod tests {
     use super::*;
     use ::image::{Rgba, RgbaImage};
 
-
     #[test]
     fn output_format_extensions() {
         assert_eq!(OutputFormat::Png.extension(), "png");
@@ -401,7 +400,6 @@ mod tests {
         assert!(matches!(statuses[3], FileStatus::Success));
         assert!(matches!(statuses[4], FileStatus::Failed(_)));
     }
-
 
     #[test]
     fn save_options_default_matches_the_ui_defaults() {

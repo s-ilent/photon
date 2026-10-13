@@ -197,10 +197,18 @@ impl ImageOp {
             ImageOp::FlipVertical => "/flip".to_string(),
             ImageOp::Grayscale => "/grayscale".to_string(),
             ImageOp::Negative => "/negative".to_string(),
-            ImageOp::Resize { width, height, filter } => format!(
+            ImageOp::Resize {
+                width,
+                height,
+                filter,
+            } => format!(
                 "/resize:({},{},{})",
-                width.map(|v| v.to_string()).unwrap_or_else(|| "0".to_string()),
-                height.map(|v| v.to_string()).unwrap_or_else(|| "0".to_string()),
+                width
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "0".to_string()),
+                height
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "0".to_string()),
                 filter.cli_name()
             ),
             ImageOp::Filter(kind) => format!("/filter:{}", kind.cli_name()),
@@ -342,7 +350,12 @@ pub(crate) fn parse_recipe(text: &str) -> Result<Vec<ImageOp>, String> {
 
 /// Apply `ops` in order to an RGBA8 buffer, returning the resulting pixels and
 /// dimensions. Pure: no I/O, no GPU.
-pub(crate) fn apply(rgba: Vec<u8>, width: u32, height: u32, ops: &[ImageOp]) -> (Vec<u8>, u32, u32) {
+pub(crate) fn apply(
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+    ops: &[ImageOp],
+) -> (Vec<u8>, u32, u32) {
     // `load_image` always produces exactly `width * height * 4` bytes, so this
     // is a defensive guard rather than an expected path.
     if rgba.len() != width as usize * height as usize * 4 {
@@ -634,12 +647,15 @@ mod tests {
             gray_pixels(&[1, 2, 3]),
             3,
             1,
-            &[ImageOp::RotateRight, ImageOp::Crop {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 1,
-            }],
+            &[
+                ImageOp::RotateRight,
+                ImageOp::Crop {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 1,
+                },
+            ],
         );
         assert_eq!((w, h), (1, 2));
         assert_eq!(gray_levels(&out), vec![1, 2]);
@@ -699,7 +715,12 @@ mod tests {
     #[test]
     fn filter_edge_applies_bias_to_a_flat_field() {
         // Edge sums to zero, so a flat field becomes the +127 bias.
-        let (out, ..) = apply(gray_pixels(&[0; 4]), 2, 2, &[ImageOp::Filter(FilterKind::Edge)]);
+        let (out, ..) = apply(
+            gray_pixels(&[0; 4]),
+            2,
+            2,
+            &[ImageOp::Filter(FilterKind::Edge)],
+        );
         assert!(gray_levels(&out).iter().all(|&v| v == 127));
     }
 
@@ -819,6 +840,10 @@ mod tests {
         assert!(ImageOp::from_cli("/filter:tint").is_err());
         assert!(ImageOp::from_cli("/crop:(1,2,3)").is_err());
         assert!(parse_recipe("/rotate:right /bogus").is_err());
-        assert_eq!(parse_recipe(""), Ok(vec![]), "an empty recipe is an empty chain");
+        assert_eq!(
+            parse_recipe(""),
+            Ok(vec![]),
+            "an empty recipe is an empty chain"
+        );
     }
 }
