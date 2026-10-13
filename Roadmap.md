@@ -64,10 +64,13 @@ pre-filled) it applies directly. One handler, two modes, no duplicated code.
 This is *the* prerequisite: key-rebinding (§10), the CLI (§10) and batch (§5)
 are all just this registry driven from different sources. Build it first.
 
-- [ ] `Command { id, name, cli_name, enable: fn(&AppState) -> bool, run }` + registry table.
-- [ ] Route menu, shortcuts, CLI and batch through the registry.
-- [ ] Per-command params as a serialisable struct with `to_cli()` / `from_cli()` —
-      the one text form shared by config, batch recipes and the CLI.
+- [x] `Command { id, name, cli_name, enable: fn(&AppState) -> bool, run }` + registry table. *(2026-10-11: `Command` + `default_bindings` + `run_command`; 2026-10-12: `MenuGroup`/`command_enabled` driving the menu bar.)*
+- [ ] Route menu, shortcuts, CLI and batch through the registry. *(Menu, shortcuts and batch are routed; the CLI is not yet.)*
+- [x] Per-command params as a serialisable struct with `to_cli()` / `from_cli()` —
+      the one text form shared by config, batch recipes and the CLI. *(2026-10-13:
+      `app/image_op.rs` — one `ImageOp` vocabulary replacing the duplicated
+      `batch::Operation`/`edit::EditOp`, with the Appendix-B text form. The CLI
+      and config consumers are §10.)*
 
 ## 2. Image model: frames over layers, and undo
 
@@ -142,7 +145,9 @@ depth internally. **Filters are compute-shader work** — see §5b.
       - [x] **convolution filters** — blur, soften, sharpen, Gaussian 3×3/5×5,
             emboss, edge (Appendix A). *(CPU path landed 2026-10-12; the compute
             shader of §5b remains the target accelerator.)*
-- [ ] **Recipe import/export** as CLI text — falls out of §1/§10.
+- [x] **Recipe import/export** as CLI text — landed 2026-10-13 on the §1 spine
+      (`image_op::recipe_text`/`parse_recipe`): the Convert window shows the
+      chain's switches, copies them out and imports from the clipboard.
 - [ ] **Batch rename**: mask with insertable tokens — file name/ext/size/date/
       time, image width/height/bpp, and `<Counter.start,step,digits>`
       (zero-padded); search-and-replace; live preview; reorderable list (order
@@ -307,7 +312,7 @@ fit a read-mostly viewer:
 
 Mapped onto the existing arcs (`Todo.md`: shader milestones M1–M5).
 
-1. **Command registry + params serialisation** (§1) — prerequisite for §5, §10.
+1. **Command registry + params serialisation** (§1) — prerequisite for §5, §10. *(Done 2026-10-13.)*
 2. **Near-term viewing polish** (§3): fit modes, zoom set, Exif auto-rotate,
    pixel readout, tile-repeat view. Small, high-visibility.
 3. **Batch conversion + chain**, and **batch rename** (§5). The chain's filter

@@ -92,8 +92,9 @@ src/
     ├── canvas.rs        # Image workspace: zoom/pan/selection drawing, checkerboard background, input handling per mouse mode.
     ├── view.rs          # Fit/zoom geometry (Roadmap §3): FitMode, FitWindow, fit_zoom, fit_window_size, zoom_limits (adaptive, image-derived), zoom_to_fill, zoom_to_desktop, centered_window_pos, ZoomLock, image_pixel_at, html_hex, tile_offsets. All wired into canvas/info bar/Settings/View menu.
     ├── settings.rs      # AppSettings + SortMode + ZoomReset (split out of app.rs), re-exported from app.rs so paths are unchanged.
-    ├── batch.rs         # Batch conversion engine (Roadmap §5): Operation chain (incl. FilterKind convolution), SaveOptions, OutputFormat, ConversionJob, convert_file/run_batch(_with_progress) (`rayon` par_iter driver). Driven by the Batch Convert window.
-    ├── edit.rs          # Interactive editing ops + bounded whole-image undo (Roadmap §4): EditOp {rotate/flip/crop/grayscale/negative} over RGBA8 + UndoStack. Pure; applied and re-uploaded from canvas.rs.
+    ├── batch.rs         # Batch conversion engine (Roadmap §5): SaveOptions, OutputFormat, ConversionJob, convert_file/run_batch(_with_progress) (`rayon` par_iter driver). Driven by the Batch Convert window; ops come from `image_op`.
+    ├── image_op.rs      # The shared operation vocabulary (Roadmap §1): ImageOp (directional rotates, flips, grayscale/negative, Resize{w,h,filter}, Filter, Crop-as-margins), apply(), ResampleFilter/FilterKind/convolve, and the Appendix-B text form (to_cli/from_cli, recipe_text/parse_recipe) shared by batch recipes and the CLI.
+    ├── edit.rs          # Interactive editing buffers + bounded whole-image undo (Roadmap §4): Rgba (the single transform implementation: rotate/flip/crop/grayscale/negative) + CropRect + UndoStack. Pure; driven from canvas.rs via image_op.
     ├── clipboard.rs     # Copy (with optional crop from selection) and paste via arboard; current_rgba() source of truth for displayed bytes.
     ├── config.rs        # Settings persistence: config.ron via serde + RON, config dir via the directories crate.
     ├── saver.rs         # Save / Save Selection As: rfd save-as dialog, background encode, bottom-bar status feedback.
@@ -179,13 +180,14 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **145 unit tests** across thirteen files (all pure-CPU except the GPU harness in `render.rs`):
+The suite is **153 unit tests** across fourteen files (all pure-CPU except the GPU harness in `render.rs`):
 
 - `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, Copy/Paste carry their raw-key fallbacks, and `command_enabled()` gating (undo/redo/crop/edit/Save disabled without history/selection/image).
 - `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; a no-Exif decode is byte-identical; an Exif `orientation=6` PNG fixture decodes with swapped dimensions and a rotation permutation (Roadmap §3); the native-BC path (compressed kept with `allow_bc` incl. byte length + colour space, RGBA8 without it, oversize fallback, legacy DXT1 → `Bc1`/`Srgb`, DXGI BC5 → `Bc5Unorm`/`Linear`); the float path (a `R32G32B32A32_Float` DDS round-trips exact `f16` values incl. >1.0, BC6H decodes to `Float16`, `allow_bc`/`max_dim` don't gate it); the colour-space/DXGI/f16 mapping helpers; plus `DecodeError::is_unsupported_format` classification (Roadmap §8).
 - `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, `FitWindow` (don't / enlarge-if-smaller / always) with monitor clamping, `centered_window_pos`, `zoom_to_desktop`, adaptive `zoom_limits`, zero-size guards, `clamp_to_limits`, `zoom_to_fill`, `ZoomLock`, plus the pixel-readout helpers (`image_pixel_at`, `html_hex`) and `tile_offsets`. Pure.
-- `app/batch.rs` — the conversion engine (Roadmap §5): rotate/flip/grayscale (documented luma)/negative/resize on known buffers, the convolution `convolve` + `FilterKind`, `SaveOptions`, `OutputFormat::extension`, overwrite-skip, `run_batch_with_progress` counting, and an end-to-end PNG→JPEG via `tempfile`. Pure/CPU.
+- `app/image_op.rs` — the operation vocabulary (Roadmap §1): every `ImageOp` applied to known buffers (rotate both directions, flip, grayscale luma, negative, resize incl. aspect, crop margins, chain order), the convolution `convolve` + `FilterKind`, `to_cli`/`from_cli`/`recipe_text`/`parse_recipe` round-trips and Appendix-B forms (case-insensitivity, rejected `%`/free-rotate/unknown switches).
+- `app/batch.rs` — the conversion engine (Roadmap §5): `SaveOptions`, `OutputFormat::extension`, overwrite-skip (incl. `Ask` behaving as skip), `run_batch_with_progress` counting, and an end-to-end PNG→JPEG via `tempfile`. Pure/CPU.
 - `app/edit.rs` — interactive edits (Roadmap §4): each rotation/flip on a known buffer, crop clamping, grayscale weights, negative, and undo/redo incl. bounded-capacity eviction. Pure.
 - `ui/batch_window.rs` — pure helpers behind the Convert window (`build_jobs`, `status_label`, `summarize`, file-list dedup, resize-with-no-dims no-op, filter-choice mapping).
 - `render.rs` — tile `chunk_grid` math, the uniform struct's WGSL layout, `bc_texture_format` mapping, and the **GPU harness** (`gpu_tests`): the render pipeline builds on a live adapter, an image draws to an offscreen target (pixels read back), a hand-built BC1 texture uploads and samples correctly, a half-float HDR texture is exposed + Reinhard-tonemapped (and a +1 EV step measurably brightens it), and a compute dispatch round-trips — all skip when no adapter (the BC test also skips without `TEXTURE_COMPRESSION_BC`).
@@ -250,7 +252,7 @@ Many extra files in the repo are **ignored by git** (see `.gitignore`) and are A
 
 1. Read `CLAUDE.md` for behavioral rules.
 2. `cargo build --release` to confirm the tree compiles (expect zero warnings, no errors).
-3. `cargo test --release` to confirm the 145 unit tests pass.
+3. `cargo test --release` to confirm the 153 unit tests pass.
 4. For runtime work, `cargo run --release -- /some/folder/of/images` to launch.
 
 Note for agents running inside the ZCode desktop app: the sandbox rewrites `argv[0]`, which breaks rustup's proxy dispatch — invoke toolchain commands as `env cargo build --release` etc.

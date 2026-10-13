@@ -15,25 +15,26 @@ comes into focus, add it here with a concrete plan.
 
 What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
 
-1. **Command registry + params serialisation** (`Roadmap.md` §1) — the spine
-   that makes key-rebinding, the CLI, and batch cheap; build it before those
-   so they share one dispatch table.
-2. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC (now with the
+1. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC (now with the
    `ColorSpace` field ready to consume).
+2. **Chainable CLI + key rebinding** (`Roadmap.md` §10) — near-free now that the
+   §1 spine exists: the switch grammar (`ImageOp::from_cli`/`parse_recipe`) and
+   the registry are in place; what's left is argv parsing + applying ops on
+   open, and a serde-able shortcut table + rebinding UI.
 3. **Shader M5: cubemap view** and the **normal-map preview** — the remaining
    shader-pass items (M3 BCn and M4 HDR/tonemap both landed 2026-10-13).
-4. **Batch rename + the remaining batch items** (`Roadmap.md` §5) — recipe
-   import/export and the interactive overwrite dialog (the chain, save options
-   and progress landed 2026-10-12).
+4. **Batch rename + the remaining batch items** (`Roadmap.md` §5) — the
+   interactive overwrite dialog (recipe import/export landed 2026-10-13).
 5. **Full browser** (`Roadmap.md` §7) with the persistent thumbnail cache.
 6. **Texture inspection sidebar** — DEFERRED: the user is designing this.
    Implement only against their design when it's ready.
 7. **Property map mode** — when a spec exists.
 
 Done recently (2026-10-12/13): viewing polish (§3), the editing core (§4), the
-batch polish (§5), and shader **M3 native BCn + the colour-space model** and
-**M4 HDR + tonemap** (§5b) are all complete; see the Done log. Next up is the
-command-registry spine (§1).
+batch polish (§5), shader **M3 native BCn + the colour-space model** and
+**M4 HDR + tonemap** (§5b), and the **§1 registry spine** (one `ImageOp`
+vocabulary + the recipe text form + batch recipe import/export) are all
+complete; see the Done log.
 
 ---
 
@@ -220,6 +221,28 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-13 (registry spine: ImageOp + recipe text, Roadmap §1/§5)
+- **One operation vocabulary**: `app/image_op.rs` holds `ImageOp` (directional
+  rotates, flips, grayscale/negative, `Resize{w,h,filter}`, convolution filters,
+  crop-as-margins), `apply()`, and the moved `ResampleFilter`/`FilterKind`/
+  `convolve`. The duplicated `batch::Operation`/`apply_operations` and
+  `edit::EditOp` are gone — transforms have the single `edit::Rgba`
+  implementation, resize/filter stay on `imageops`/`convolve`. The editor and
+  the registry dispatch `ImageOp`s directly (crop-from-selection builds
+  margins); batch gains crop at the engine level.
+- **The Appendix-B text form**: `to_cli`/`from_cli`/`recipe_text`/`parse_recipe`
+  — the serialisation the CLI (§10) and rebinding will reuse. Documented
+  superset: `/resize:(W,H[,filter])` (Appendix B has no filter slot); `%` and
+  free rotation are rejected with clear errors.
+- **Batch recipe import/export** (§5's remaining item): the Convert window shows
+  the chain's recipe text (per-step switch tooltips), copies it to the clipboard
+  and imports from it. No TextEdit, deliberately — `input.rs` takes Ctrl+C/V at
+  the app layer. A failed import reports an error and leaves the chain intact.
+- Tests: 145 → 153 (round-trips, Appendix-B parsing, crop/chain application).
+- Deviation from the plan: the recipe UI landed with the spine instead of via a
+  subagent — it is the parse side's only consumer, and landing it separately
+  would have meant a warning-bearing intermediate commit.
 
 ### 2026-10-13 (shader M4: HDR + tonemap)
 - **Float/HDR path**: EXR/HDR decode via `into_rgba32f()` (was clamped through
