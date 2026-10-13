@@ -10,6 +10,7 @@ use crate::app::batch::{
 use crate::app::image_op::{self, FilterKind, ImageOp, ResampleFilter};
 use crate::app::{BatchMessage, BatchState, PhotonApp};
 use eframe::egui;
+use egui_extras::{Column, TableBuilder};
 use egui_phosphor::regular as icons;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -313,29 +314,48 @@ fn file_list_section(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBu
     ui.label(format!("{} file(s)", batch.files.len()));
 
     let mut remove: Option<usize> = None;
-    egui::ScrollArea::vertical()
+    TableBuilder::new(ui)
         .id_salt("batch_file_list")
-        .max_height(140.0)
-        .show(ui, |ui| {
-            for (index, path) in batch.files.iter().enumerate() {
-                ui.horizontal(|ui| {
+        .striped(true)
+        .column(Column::exact(26.0))
+        .column(
+            Column::auto()
+                .resizable(true)
+                .clip(true)
+                .at_least(120.0),
+        )
+        .column(Column::remainder().clip(true).at_least(72.0))
+        .max_scroll_height(140.0)
+        .header(20.0, |mut header| {
+            header.col(|_ui| {});
+            header.col(|ui| {
+                ui.strong("File");
+            });
+            header.col(|ui| {
+                ui.strong("Status");
+            });
+        })
+        .body(|body| {
+            body.rows(22.0, batch.files.len(), |mut row| {
+                let index = row.index();
+                let path = &batch.files[index];
+                row.col(|ui| {
                     if ui.small_button(icons::X).clicked() {
                         remove = Some(index);
                     }
+                });
+                row.col(|ui| {
                     let name = path
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| path.display().to_string());
-                    ui.label(name);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let status = match batch.statuses.get(index) {
-                            Some(status) => status,
-                            None => &None,
-                        };
-                        ui.label(status_label(status));
-                    });
+                    ui.label(name).on_hover_text(path.display().to_string());
                 });
-            }
+                row.col(|ui| {
+                    let status = batch.statuses.get(index).unwrap_or(&None);
+                    ui.label(status_label(status));
+                });
+            });
         });
     if let Some(index) = remove {
         batch.files.remove(index);
@@ -416,14 +436,52 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     let mut remove_op: Option<usize> = None;
     if batch.operations.is_empty() {
         ui.label("(no operations)");
-    }
-    for (index, op) in batch.operations.iter().enumerate() {
-        ui.horizontal(|ui| {
-            if ui.small_button(icons::X).clicked() {
-                remove_op = Some(index);
-            }
-            ui.label(operation_label(op)).on_hover_text(op.to_cli());
-        });
+    } else {
+        TableBuilder::new(ui)
+            .id_salt("batch_operations")
+            .striped(true)
+            .column(Column::exact(26.0))
+            .column(Column::exact(26.0))
+            .column(
+                Column::auto()
+                    .resizable(true)
+                    .clip(true)
+                    .at_least(100.0),
+            )
+            .column(Column::remainder().clip(true))
+            .max_scroll_height(120.0)
+            .header(20.0, |mut header| {
+                header.col(|_ui| {});
+                header.col(|ui| {
+                    ui.strong("#");
+                });
+                header.col(|ui| {
+                    ui.strong("Operation");
+                });
+                header.col(|ui| {
+                    ui.strong("Switch");
+                });
+            })
+            .body(|body| {
+                body.rows(22.0, batch.operations.len(), |mut row| {
+                    let index = row.index();
+                    let op = &batch.operations[index];
+                    row.col(|ui| {
+                        if ui.small_button(icons::X).clicked() {
+                            remove_op = Some(index);
+                        }
+                    });
+                    row.col(|ui| {
+                        ui.label(format!("{}", index + 1));
+                    });
+                    row.col(|ui| {
+                        ui.label(operation_label(op));
+                    });
+                    row.col(|ui| {
+                        ui.monospace(op.to_cli());
+                    });
+                });
+            });
     }
     if let Some(index) = remove_op {
         batch.operations.remove(index);

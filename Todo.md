@@ -255,7 +255,8 @@ the escalation path if a picked crate needs a fix upstream lacks.
       watching, re-exports notify), `profiling 1` (+opt-in puffin/tracy),
       `egui-notify 0.22` (toasts — only if we need queued messages; house
       rule: plain text), `egui_taffy 0.12` (flexbox — only if native layout
-      stops coping). Vetted-but-inapplicable: `egui_dock`, `egui-arbor`
+      stops coping). **`egui_extras` adopted 2026-10-14** (TableBuilder for the
+      batch window's file and operation tables). Vetted-but-inapplicable: `egui_dock`, `egui-arbor`
       (revisit for the texture sidebar), `egui_plot`, `egui_code_editor`,
       `egui_field_editor`, `ab_glyph`, `mimalloc`, `re_ui 0.33`
       (evaluated 2026-10-14: the one egui-0.34-compatible release, but it is

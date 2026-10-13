@@ -65,6 +65,9 @@ Placement rule for a new command — ask what it touches:
 - **Combo box** — mutually exclusive, 6+ options, or tight space.
 - **Button** — triggers an immediate action. Never a state toggle; never
   "… Now" phrasing ("Save", not "Save Now").
+- **Table** — tabular data lists (the batch file list, the operation steps)
+  via `egui_extras::TableBuilder`: header row on, columns resizable.
+  `Grid` is the form idiom (§4), not a data table.
 
 ## 4. Forms and dialogs
 
