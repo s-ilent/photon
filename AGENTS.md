@@ -85,7 +85,8 @@ src/
 │   ├── info_bar.rs      # Bottom info bar (index, filename, dimensions, zoom, save status, layer/face selector).
 │   ├── sidebar.rs       # Left file-list sidebar (sort combo + virtualized rows).
 │   ├── settings_window.rs # Settings window body.
-│   ├── batch_window.rs  # Batch Convert window: file list, format/quality/folder, operation chain (incl. convolution filters), non-blocking run, determinate progress + per-file status.
+│   ├── batch_window.rs  # Batch Convert window: file list, format/quality/folder, operation chain (incl. convolution filters), recipe text in/out, non-blocking run, determinate progress + per-file status.
+│   ├── info_window.rs   # Image Information window: File/Image/Metadata rows from the probe + the Exif tag table; background probe with automatic re-probe on target change.
 │   └── overlay.rs       # Centre-screen status overlay (spinner / error / unsupported) + loading text.
 └── app/
     ├── loader.rs        # Worker thread (decode + GPU tile upload), LRU texture cache, speculative neighbor preload, directory load + watcher, sorting.
@@ -94,6 +95,8 @@ src/
     ├── settings.rs      # AppSettings + SortMode + ZoomReset (split out of app.rs), re-exported from app.rs so paths are unchanged.
     ├── batch.rs         # Batch conversion engine (Roadmap §5): SaveOptions, OutputFormat, ConversionJob, convert_file/run_batch(_with_progress) (`rayon` par_iter driver). Driven by the Batch Convert window; ops come from `image_op`.
     ├── image_op.rs      # The shared operation vocabulary (Roadmap §1): ImageOp (directional rotates, flips, grayscale/negative, Resize{w,h,filter}, Filter, Crop-as-margins), apply(), ResampleFilter/FilterKind/convolve, and the Appendix-B text form (to_cli/from_cli, recipe_text/parse_recipe) shared by batch recipes and the CLI.
+    ├── image_info.rs    # Headers-only metadata probe behind the Image Information window (Roadmap §9): one decoder parse yields format, colour depth, alpha and the raw Exif/ICC/XMP/IPTC blocks; DDS takes its own image_dds header branch.
+    ├── exif.rs          # Exif tag rows (kamadak-exif) from the raw block: IFD/tag/value, capped, malformed blocks yield none.
     ├── edit.rs          # Interactive editing buffers + bounded whole-image undo (Roadmap §4): Rgba (the single transform implementation: rotate/flip/crop/grayscale/negative) + CropRect + UndoStack. Pure; driven from canvas.rs via image_op.
     ├── clipboard.rs     # Copy (with optional crop from selection) and paste via arboard; current_rgba() source of truth for displayed bytes.
     ├── config.rs        # Settings persistence: config.ron via serde + RON, config dir via the directories crate.
@@ -126,7 +129,7 @@ There are two background threads plus the main (render) thread, connected by `st
 
 Zoom/pan reset on image switch per the configured `ZoomReset` setting (`always` / `dimension_change` / `never`, default `dimension_change`) — see the tests in `app/loader.rs`. All settings persist to `config.ron` (serde + RON, `#[serde(default)]` so partial files load; directory from the `directories` crate, overridable with `PHOTON_CONFIG_DIR`). Settings are rewritten only when they actually change, so hand edits survive while nothing is touched.
 
-Viewer concurrency is raw `std::thread` + `mpsc`; the batch engine additionally uses `rayon`'s `par_iter`. The previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching), `rayon` (batch parallelism), `pollster` (dev-only; drives the async wgpu calls in the GPU tests).
+Viewer concurrency is raw `std::thread` + `mpsc`; the batch engine additionally uses `rayon`'s `par_iter`. The previously-listed unused dependencies (`tokio`, `chrono`, `parking_lot`, `bytemuck`, `thiserror`) have been removed from `Cargo.toml` (roadmap entries for reintroducing each live in `Todo.md`). Current extras: `image_dds` (DDS decode), `serde`/`ron` (config), `directories` (config dir), `log`/`env_logger` (diagnostics), `egui-phosphor` (icon font), `notify-debouncer-full` (directory watching), `rayon` (batch parallelism), `half` (f16/HDR buffers), `jiff` (dates in Image Information), `humansize` (file sizes), `kamadak-exif` (Exif tag panel), `pollster` (dev-only; drives the async wgpu calls in the GPU tests).
 
 ### GPU / render pipeline
 
@@ -170,6 +173,7 @@ Defined in `src/main.rs` via `egui::KeyboardShortcut` and `Modifiers::COMMAND` (
 | Previous image | `Backspace` / `Left Arrow` |
 | Cycle mouse mode | `Tab` / `Backslash` |
 | Toggle fullscreen | `F11` |
+| Image Information | `Cmd/Ctrl + I` (also the File menu) |
 | Undo / redo edit | `Cmd/Ctrl + Z` / `Cmd/Ctrl + Shift + Z` |
 
 The File/Edit/View menu bar (in `ui/toolbar.rs`) is driven by the registry: every `Command` is listed under its `MenuGroup` with its `command_enabled()` state, so it is the discoverable home for the edit ops (rotate/flip/crop/grayscale/negative), Convert…, and the runtime-only View actions (Lock Zoom, Fit Window to Image, Centre Window, Zoom to Desktop) that are not registry commands.
@@ -180,13 +184,15 @@ GOTCHA: egui-winit rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/
 
 ## 5. Testing
 
-The suite is **153 unit tests** across fourteen files (all pure-CPU except the GPU harness in `render.rs`):
+The suite is **165 unit tests** across sixteen files (all pure-CPU except the GPU harness in `render.rs`):
 
 - `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, Copy/Paste carry their raw-key fallbacks, and `command_enabled()` gating (undo/redo/crop/edit/Save disabled without history/selection/image).
 - `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; a no-Exif decode is byte-identical; an Exif `orientation=6` PNG fixture decodes with swapped dimensions and a rotation permutation (Roadmap §3); the native-BC path (compressed kept with `allow_bc` incl. byte length + colour space, RGBA8 without it, oversize fallback, legacy DXT1 → `Bc1`/`Srgb`, DXGI BC5 → `Bc5Unorm`/`Linear`); the float path (a `R32G32B32A32_Float` DDS round-trips exact `f16` values incl. >1.0, BC6H decodes to `Float16`, `allow_bc`/`max_dim` don't gate it); the colour-space/DXGI/f16 mapping helpers; plus `DecodeError::is_unsupported_format` classification (Roadmap §8).
 - `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, `FitWindow` (don't / enlarge-if-smaller / always) with monitor clamping, `centered_window_pos`, `zoom_to_desktop`, adaptive `zoom_limits`, zero-size guards, `clamp_to_limits`, `zoom_to_fill`, `ZoomLock`, plus the pixel-readout helpers (`image_pixel_at`, `html_hex`) and `tile_offsets`. Pure.
 - `app/image_op.rs` — the operation vocabulary (Roadmap §1): every `ImageOp` applied to known buffers (rotate both directions, flip, grayscale luma, negative, resize incl. aspect, crop margins, chain order), the convolution `convolve` + `FilterKind`, `to_cli`/`from_cli`/`recipe_text`/`parse_recipe` round-trips and Appendix-B forms (case-insensitivity, rejected `%`/free-rotate/unknown switches).
+- `app/image_info.rs` — the metadata probe (Roadmap §9): PNG (with and without an Exif block), JPEG and a DDS matrix (BC1/BC5/BC7/uncompressed → compression family, alpha, dimensions) probed headers-only, plus the colour-depth and size/date display helpers.
+- `app/exif.rs` — the tag panel: a synthetic little-endian TIFF block yields the expected Make/Orientation rows (kamadak's own renderings), and truncated/garbage blocks yield no rows without panicking.
 - `app/batch.rs` — the conversion engine (Roadmap §5): `SaveOptions`, `OutputFormat::extension`, overwrite-skip (incl. `Ask` behaving as skip), `run_batch_with_progress` counting, and an end-to-end PNG→JPEG via `tempfile`. Pure/CPU.
 - `app/edit.rs` — interactive edits (Roadmap §4): each rotation/flip on a known buffer, crop clamping, grayscale weights, negative, and undo/redo incl. bounded-capacity eviction. Pure.
 - `ui/batch_window.rs` — pure helpers behind the Convert window (`build_jobs`, `status_label`, `summarize`, file-list dedup, resize-with-no-dims no-op, filter-choice mapping).
@@ -252,7 +258,7 @@ Many extra files in the repo are **ignored by git** (see `.gitignore`) and are A
 
 1. Read `CLAUDE.md` for behavioral rules.
 2. `cargo build --release` to confirm the tree compiles (expect zero warnings, no errors).
-3. `cargo test --release` to confirm the 153 unit tests pass.
+3. `cargo test --release` to confirm the 165 unit tests pass.
 4. For runtime work, `cargo run --release -- /some/folder/of/images` to launch.
 
 Note for agents running inside the ZCode desktop app: the sandbox rewrites `argv[0]`, which breaks rustup's proxy dispatch — invoke toolchain commands as `env cargo build --release` etc.

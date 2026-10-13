@@ -15,8 +15,11 @@ comes into focus, add it here with a concrete plan.
 
 What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
 
-1. **Metadata + Image Info** (`Roadmap.md` §9) — Exif panel; ICC (now with the
-   `ColorSpace` field ready to consume).
+1. **Metadata follow-ups** (`Roadmap.md` §9) — Exif panel and Image Information
+   landed 2026-10-13; what remains is **Exif/IPTC/XMP preservation on save**
+   (saver/batch encoder threading), **ICC colour management** (shader arc; the
+   `ColorSpace` field is the substrate), and **DPI** (not exposed by `image`
+   0.25 — needs a direct `png` dependency and per-format header parsing).
 2. **Chainable CLI + key rebinding** (`Roadmap.md` §10) — near-free now that the
    §1 spine exists: the switch grammar (`ImageOp::from_cli`/`parse_recipe`) and
    the registry are in place; what's left is argv parsing + applying ops on
@@ -71,7 +74,8 @@ complete; see the Done log.
       sort, filters, folder tree/history, preview pane, file ops.
 - [ ] **Panorama creator** (`Roadmap.md` §6) — concatenation stitch only.
 - [ ] **ICC / color profiles** (`Roadmap.md` §9) — read ICC and apply in the
-      shader pass; deferred with it.
+      shader pass; deferred with it. *(The Image Information window already
+      reports whether a profile is present and its size.)*
 - [ ] **Watcher niceties** (post-MVP folder watching, shipped 2026-10-11) —
       handle the watched directory itself being deleted/renamed (currently
       the watcher just stops producing useful listings); consider a
@@ -221,6 +225,22 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-13 (Image Information + Exif panel, Roadmap §9)
+- **`app/image_info.rs`**: a headers-only probe — one decoder parse yields
+  format, colour depth (incl. sub-8-bit/indexed layouts), alpha, and the raw
+  Exif/ICC/XMP/IPTC blocks; `.dds` goes through `image_dds` (the `image` crate
+  cannot read BC4/5/7) for dimensions + compression family. `jiff` dates,
+  `humansize` sizes.
+- **`ui/info_window.rs`**: File/Image/Metadata rows, cubemap/array frame counts,
+  colour space + HDR, and the Exif tag table; probes on a background thread and
+  re-probes when the target changes. Opened by `Command::ImageInformation`
+  (File menu, `Cmd/Ctrl+I`).
+- **`app/exif.rs`**: kamadak-exif wrapped into IFD/tag/value rows (IFD named via
+  `tag.context()`), capped at 200, malformed blocks yield none. Dep added:
+  `kamadak-exif 0.6.1` (packaged as `exif`).
+- Tests: 153 → 165. Still open in §9: Exif/IPTC/XMP preservation on save, ICC
+  colour management, DPI (unavailable in `image` 0.25).
 
 ### 2026-10-13 (registry spine: ImageOp + recipe text, Roadmap §1/§5)
 - **One operation vocabulary**: `app/image_op.rs` holds `ImageOp` (directional

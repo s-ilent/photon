@@ -247,8 +247,10 @@ Cross-cutting:
 
 ## 9. Metadata & colour
 
-- [ ] **Exif panel** (~90 tags: camera, exposure, flash, WB, metering) and
-      **preserve Exif/IPTC/XMP on JPEG save**.
+- [x] **Exif panel** (~90 tags: camera, exposure, flash, WB, metering) — landed
+      2026-10-13 (`app/exif.rs` + the Image Information window's tag table:
+      every tag kamadak-exif reports, grouped by IFD). **Preserve Exif/IPTC/XMP
+      on JPEG save** is still open (needs encoder-side metadata threading).
 - [ ] **Image Information** — dimensions, colour depth/palette, frames, pages,
       compression, transparency method, file size/date, DPI (+ original size
       from DPI), progressive/interlaced, ICC profile button.
