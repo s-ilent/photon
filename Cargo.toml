@@ -23,6 +23,7 @@ half = "2"
 jiff = "0.2"
 humansize = "2"
 image_dds = { version = "0.7", default-features = false, features = ["ddsfile", "image"] }
+exif = { package = "kamadak-exif", version = "0.6.1" }
 serde = { version = "1.0.229", features = ["derive"] }
 ron = "0.12.2"
 directories = "6.0.0"

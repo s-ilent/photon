@@ -161,9 +161,34 @@ fn info_window_body(ui: &mut egui::Ui, app: &PhotonApp) -> bool {
             ui.label("IPTC:");
             ui.label(present(info.iptc));
             ui.label("Exif:");
-            // The tag panel (app/exif) renders the block's rows here.
             ui.label(present(info.exif.as_ref().map(|b| b.len())));
         });
+
+    if let Some(block) = info.exif.as_ref() {
+        let rows = crate::app::exif::parse(block);
+        if rows.is_empty() {
+            ui.label("Exif block unreadable.");
+        } else {
+            egui::CollapsingHeader::new(format!("Exif tags ({})", rows.len())).show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("info_exif")
+                            .num_columns(3)
+                            .striped(true)
+                            .spacing([12.0, 4.0])
+                            .show(ui, |ui| {
+                                for row in &rows {
+                                    ui.label(row.ifd);
+                                    ui.label(&row.tag);
+                                    ui.label(&row.value);
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            });
+        }
+    }
 
     refresh_button(ui)
 }

@@ -24,6 +24,8 @@ pub(crate) mod batch;
 // Interactive editing ops + undo (Roadmap.md §4) — applied from the canvas,
 // which re-uploads the result on the main thread.
 pub(crate) mod edit;
+// Exif tag rows behind the Image Information window (Roadmap §9).
+pub(crate) mod exif;
 // The shared operation vocabulary (Roadmap.md §1): one ImageOp enum for the
 // transforms the editor and the batch chain both apply, with the Appendix-B
 // text form that recipes and the CLI serialise to.
