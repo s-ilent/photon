@@ -135,6 +135,9 @@ pub(crate) struct BatchState {
     pub(crate) statuses: Vec<Option<batch::FileStatus>>,
     /// Receiver for the background run's result; `Some` only while running.
     pub(crate) receiver: Option<Receiver<BatchMessage>>,
+    /// The recipe field's text, kept in sync with `operations` whenever the
+    /// chain changes through the buttons.
+    pub(crate) recipe_text: String,
     /// True from the moment Run is clicked until the worker reports back.
     pub(crate) running: bool,
     /// `(done, total)` files for the running batch, for the progress bar.
@@ -166,6 +169,7 @@ impl Default for BatchState {
             receiver: None,
             running: false,
             progress: (0, 0),
+            recipe_text: String::new(),
             recipe_error: None,
             pending_op: 0,
             resize_width: 0,

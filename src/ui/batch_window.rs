@@ -216,6 +216,12 @@ fn spawn_batch(
 
 /// Validate the current state and kick off a run. No-op when preconditions
 /// are unmet (no files); the Run button is disabled in that case anyway.
+/// Re-derive the recipe field's text from the chain (after a button changed
+/// it). Typed edits flow the other way: text parses into `operations`.
+fn sync_recipe_text(batch: &mut BatchState) {
+    batch.recipe_text = image_op::recipe_text(&batch.operations);
+}
+
 fn start_batch(batch: &mut BatchState) {
     if batch.files.is_empty() {
         return;
@@ -289,40 +295,21 @@ fn batch_window_body(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBu
     operations_section(ui, batch);
     ui.separator();
     recipe_section(ui, batch);
-    ui.separator();
     run_section(ui, batch);
 }
 
+/// The file list table, with the add/clear actions and the count below it.
 fn file_list_section(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBuf]) {
-    ui.horizontal(|ui| {
-        if ui.button("Add files\u{2026}").clicked() {
-            let picked = rfd::FileDialog::new()
-                .add_filter("Images", crate::dir_walker::SUPPORTED_EXTENSIONS)
-                .pick_files();
-            if let Some(paths) = picked {
-                add_files(batch, paths);
-            }
-        }
-        if ui.button("Add current folder").clicked() {
-            add_files(batch, images.to_vec());
-        }
-        if ui.button("Clear").clicked() {
-            batch.files.clear();
-            batch.statuses.clear();
-        }
-    });
-
-    ui.label(format!("{} file(s)", batch.files.len()));
-
     let width = ui.available_width();
     let mut remove: Option<usize> = None;
     TableBuilder::new(ui)
         .id_salt("batch_file_list")
         .striped(true)
-        .column(Column::exact(width * 0.28))
+        .resizable(true)
+        .column(Column::initial(width * 0.28).resizable(true).clip(true))
         .column(Column::remainder().clip(true))
-        .column(Column::exact(26.0))
-        .column(Column::exact(26.0))
+        .column(Column::exact(26.0).resizable(false).clip(true))
+        .column(Column::exact(26.0).resizable(false).clip(true))
         .max_scroll_height(140.0)
         .header(20.0, |mut header| {
             header.col(|ui| {
@@ -373,8 +360,28 @@ fn file_list_section(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBu
             batch.statuses.remove(index);
         }
     }
-}
 
+    ui.horizontal(|ui| {
+        if ui.button("Add files\u{2026}").clicked() {
+            let picked = rfd::FileDialog::new()
+                .add_filter("Images", crate::dir_walker::SUPPORTED_EXTENSIONS)
+                .pick_files();
+            if let Some(paths) = picked {
+                add_files(batch, paths);
+            }
+        }
+        if ui.button("Add current folder").clicked() {
+            add_files(batch, images.to_vec());
+        }
+        if ui.button("Clear").clicked() {
+            batch.files.clear();
+            batch.statuses.clear();
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(format!("{} file(s)", batch.files.len()));
+        });
+    });
+}
 fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     egui::Grid::new("batch_output")
         .num_columns(2)
@@ -438,12 +445,10 @@ fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                 }
                 match &batch.output_dir {
                     Some(dir) => {
-                        ui.label(dir.display().to_string());
+                        ui.add(egui::Label::new(dir.display().to_string()).truncate());
                     }
                     None => {
-                        ui.label(
-                            "(none — converted files are written alongside their inputs)",
-                        );
+                        ui.label("(none)");
                     }
                 }
             });
@@ -459,60 +464,59 @@ fn grid_label(ui: &mut egui::Ui, text: &str) {
 }
 
 fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
-    ui.label("Operations (applied in order):");
+    ui.label("Operations");
+    sync_recipe_text(batch);
 
     let width = ui.available_width();
     let mut remove_op: Option<usize> = None;
-    if batch.operations.is_empty() {
-        ui.label("(no operations)");
-    } else {
-        TableBuilder::new(ui)
-            .id_salt("batch_operations")
-            .striped(true)
-            .column(Column::exact(26.0))
-            .column(Column::exact(width * 0.30))
-            .column(Column::remainder().clip(true))
-            .column(Column::exact(26.0))
-            .max_scroll_height(120.0)
-            .header(20.0, |mut header| {
-                header.col(|ui| {
-                    ui.strong("#");
+    TableBuilder::new(ui)
+        .id_salt("batch_operations")
+        .striped(true)
+        .resizable(true)
+        .column(Column::exact(26.0).resizable(false).clip(true))
+        .column(Column::initial(width * 0.30).resizable(true).clip(true))
+        .column(Column::remainder().clip(true))
+        .column(Column::exact(26.0).resizable(false).clip(true))
+        .max_scroll_height(120.0)
+        .header(20.0, |mut header| {
+            header.col(|ui| {
+                ui.strong("#");
+            });
+            header.col(|ui| {
+                ui.strong("Operation");
+            });
+            header.col(|ui| {
+                ui.strong("Switch");
+            });
+            header.col(|_ui| {});
+        })
+        .body(|body| {
+            body.rows(22.0, batch.operations.len(), |mut row| {
+                let index = row.index();
+                let op = &batch.operations[index];
+                row.col(|ui| {
+                    ui.label(format!("{}.", index + 1));
                 });
-                header.col(|ui| {
-                    ui.strong("Operation");
+                row.col(|ui| {
+                    ui.label(operation_label(op));
                 });
-                header.col(|ui| {
-                    ui.strong("Switch");
+                row.col(|ui| {
+                    ui.monospace(op.to_cli());
                 });
-                header.col(|_ui| {});
-            })
-            .body(|body| {
-                body.rows(22.0, batch.operations.len(), |mut row| {
-                    let index = row.index();
-                    let op = &batch.operations[index];
-                    row.col(|ui| {
-                        ui.label(format!("{}", index + 1));
-                    });
-                    row.col(|ui| {
-                        ui.label(operation_label(op));
-                    });
-                    row.col(|ui| {
-                        ui.monospace(op.to_cli());
-                    });
-                    row.col(|ui| {
-                        if ui.small_button(icons::X).clicked() {
-                            remove_op = Some(index);
-                        }
-                    });
+                row.col(|ui| {
+                    if ui.small_button(icons::X).clicked() {
+                        remove_op = Some(index);
+                    }
                 });
             });
-    }
+        });
     if let Some(index) = remove_op {
         batch.operations.remove(index);
+        sync_recipe_text(batch);
     }
 
-    // Fixed rows: the resize parameters stay visible but disabled unless the
-    // chosen step uses them, so the layout never jumps (UI-DESIGN §5).
+    // Fixed rows: the parameters stay visible but disabled unless the chosen
+    // step uses them, so the layout never jumps (UI-DESIGN §5).
     let choice = OperationChoice::ALL[batch.pending_op.min(OperationChoice::ALL.len() - 1)];
     let resizing = choice == OperationChoice::Resize;
     egui::Grid::new("batch_add_step")
@@ -540,12 +544,13 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                         .to_operation(batch.resize_width, batch.resize_height, batch.resize_filter)
                     {
                         batch.operations.push(op);
+                        sync_recipe_text(batch);
                     }
                 }
             });
             ui.end_row();
 
-            grid_label(ui, "Resize to:");
+            grid_label(ui, "Parameters:");
             ui.horizontal(|ui| {
                 ui.add_enabled(
                     resizing,
@@ -556,31 +561,29 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                     resizing,
                     egui::DragValue::new(&mut batch.resize_height).range(0..=100_000),
                 );
-                egui::ComboBox::from_id_salt("batch_filter")
-                    .selected_text(filter_label(batch.resize_filter))
-                    .show_ui(ui, |ui| {
-                        for filter in [
-                            ResampleFilter::Nearest,
-                            ResampleFilter::Triangle,
-                            ResampleFilter::CatmullRom,
-                            ResampleFilter::Gaussian,
-                            ResampleFilter::Lanczos3,
-                        ] {
-                            ui.selectable_value(
-                                &mut batch.resize_filter,
-                                filter,
-                                filter_label(filter),
-                            );
-                        }
-                    });
+                ui.add_enabled_ui(resizing, |ui| {
+                    egui::ComboBox::from_id_salt("batch_filter")
+                        .selected_text(filter_label(batch.resize_filter))
+                        .show_ui(ui, |ui| {
+                            for filter in [
+                                ResampleFilter::Nearest,
+                                ResampleFilter::Triangle,
+                                ResampleFilter::CatmullRom,
+                                ResampleFilter::Gaussian,
+                                ResampleFilter::Lanczos3,
+                            ] {
+                                ui.selectable_value(
+                                    &mut batch.resize_filter,
+                                    filter,
+                                    filter_label(filter),
+                                );
+                            }
+                        });
+                });
             });
             ui.end_row();
         });
-    ui.label(
-        egui::RichText::new("Resize W\u{d7}H 0 = keep the aspect ratio.").size(11.0),
-    );
 }
-
 /// The per-file outcome as a status-bar icon (text on hover).
 fn status_icon(status: &Option<FileStatus>) -> (&'static str, egui::Color32) {
     match status {
@@ -591,58 +594,36 @@ fn status_icon(status: &Option<FileStatus>) -> (&'static str, egui::Color32) {
     }
 }
 
-/// The operation chain as recipe text (the form the CLI shares), with
-/// clipboard export/import. There is deliberately no text field: the app takes
-/// Ctrl+C/V at the input layer (see `input.rs`), so a TextEdit would never see
-/// it — the clipboard in/out sidesteps that.
+/// The operation chain as editable recipe text — the same serialisation the
+/// command line takes. Edits re-parse into the chain live; a parse error is
+/// shown and leaves the chain untouched. Ctrl+C/V belong to the field (the
+/// app pauses command dispatch while a text field owns the keyboard).
 fn recipe_section(ui: &mut egui::Ui, batch: &mut BatchState) {
-    ui.label("Recipe (shared with the CLI):");
-    let text = image_op::recipe_text(&batch.operations);
-    ui.monospace(if text.is_empty() { "(empty)" } else { &text });
-    ui.horizontal(|ui| {
-        if ui.button("Copy recipe").clicked() && !text.is_empty() {
-            ui.ctx().copy_text(text.clone());
-        }
-        if ui.button("Import from clipboard").clicked() {
-            match import_recipe_from_clipboard() {
-                Ok(ops) => {
-                    batch.operations = ops;
-                    batch.recipe_error = None;
-                }
-                Err(e) => batch.recipe_error = Some(e),
+    ui.label("Recipe");
+    let field = ui.add(
+        egui::TextEdit::singleline(&mut batch.recipe_text)
+            .id_salt("batch_recipe")
+            .font(egui::TextStyle::Monospace)
+            .desired_width(ui.available_width()),
+    );
+    if field.changed() {
+        match image_op::parse_recipe(&batch.recipe_text) {
+            Ok(ops) => {
+                batch.operations = ops;
+                batch.recipe_error = None;
             }
+            Err(e) => batch.recipe_error = Some(e),
         }
-    });
+    }
     if let Some(error) = &batch.recipe_error {
-        ui.label(error);
+        ui.label(egui::RichText::new(error).color(theme::RED));
     }
 }
 
-/// Read the clipboard and parse it as a recipe chain.
-fn import_recipe_from_clipboard() -> Result<Vec<ImageOp>, String> {
-    let mut clipboard =
-        arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
-    let text = clipboard
-        .get_text()
-        .map_err(|e| format!("no text on the clipboard: {e}"))?;
-    import_recipe(&text)
-}
-
-/// Parse clipboard text into a chain. Blank text is an error — an empty recipe
-/// is reachable via an empty chain, not by pasting nothing.
-fn import_recipe(text: &str) -> Result<Vec<ImageOp>, String> {
-    if text.trim().is_empty() {
-        return Err("the clipboard has no recipe text".to_string());
-    }
-    image_op::parse_recipe(text)
-}
 
 fn run_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     let can_run = !batch.running && !batch.files.is_empty();
     ui.horizontal(|ui| {
-        if ui.add_enabled(can_run, egui::Button::new("Run")).clicked() {
-            start_batch(batch);
-        }
         if batch.running {
             ui.add(egui::Spinner::new());
             ui.label("Converting\u{2026}");
@@ -653,6 +634,12 @@ fn run_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                 success, skipped, failed
             ));
         }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add_enabled(can_run, egui::Button::new("Run")).clicked() {
+                start_batch(batch);
+            }
+        });
     });
 
     if batch.running {
@@ -666,7 +653,6 @@ fn run_section(ui: &mut egui::Ui, batch: &mut BatchState) {
         ui.add(egui::ProgressBar::new(fraction).show_percentage());
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -777,17 +763,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn import_recipe_rejects_blank_text_but_parses_chains() {
-        assert_eq!(
-            import_recipe("   "),
-            Err("the clipboard has no recipe text".to_string())
-        );
-        assert_eq!(
-            import_recipe("--rotate right --negative"),
-            Ok(vec![ImageOp::RotateRight, ImageOp::Negative])
-        );
-    }
 
     #[test]
     fn operation_choice_labels_are_nonempty_and_distinct() {
@@ -809,8 +784,10 @@ mod table_probe {
     #[test]
     fn headers_paint() {
         let ctx = egui::Context::default();
-        let mut batch = BatchState::default();
-        batch.files = vec![PathBuf::from("/tmp/a.png")];
+        let mut batch = BatchState {
+            files: vec![PathBuf::from("/tmp/a.png")],
+            ..BatchState::default()
+        };
         for frame in 0..2 {
             let out = ctx.run_ui(egui::RawInput::default(), |ctx| {
                 let mut open = true;
@@ -831,7 +808,7 @@ mod table_probe {
             if frame == 1 {
                 assert!(joined.contains("Filename"), "header text painted: {joined}");
                 assert!(joined.contains("Path"), "header text painted: {joined}");
-                assert!(joined.contains("Status"), "header text painted: {joined}");
+                assert!(joined.contains("a.png"), "row text painted: {joined}");
             }
         }
     }
