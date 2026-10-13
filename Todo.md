@@ -307,6 +307,23 @@ the escalation path if a picked crate needs a fix upstream lacks.
 
 ## Done
 
+### 2026-10-14 (user nitpicks: centred forms, menubar hover switching, mouse readout)
+- **Preferences forms**: every page renders on one centred content column
+  (460 pt max, clamped when narrow); the label column is a fixed 180 pt and the
+  field column is fixed, so General/View/Shortcuts share one geometry and the
+  form never moves on a page switch. Long checkbox captions wrap; combo values
+  truncate on one line at narrow widths. The centring needed a widget-like
+  child (`allocate_ui_with_layout`) — a `with_layout` scope anchors left and
+  never centred anything (found by rendering a wide pane).
+- **Menubar hover switching**: egui 0.34 opens a top-level menu as a
+  memory-tracked popup and switches only on click (its hover-switch code lives
+  in `SubMenu`, which a bar never runs). `ui_menu_bar` now moves the open popup
+  when the pointer hovers a neighbouring title; two kittest tests pin it.
+- **Mouse mode** shows in the bottom bar, right-aligned ("Mouse: Browse"),
+  plain like the other readouts; the toolbar keeps the cycle control.
+- **Batch Convert**'s two form grids share a 120 pt label column (its own
+  longest label), so their field columns line up.
+
 ### 2026-10-14 (tool-window layout pass: render-first, invisible text root-caused)
 - **Render checks** (`ui/render_checks.rs`): `egui_kittest` draws the Batch
   Convert and Preferences bodies at their real window sizes under the app
