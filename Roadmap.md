@@ -272,15 +272,26 @@ Cross-cutting:
 Photon persists `config.ron` (serde + RON). Extend it, and build both faces of
 the registry on top.
 
-- [ ] **Per-command rebinding**: shortcut table and mouse-mode mapping (each
-      button, wheel up/down, double-click → a mode). This is the
-      `Key configuration` item in `Todo.md`.
-- [ ] **Chainable CLI**: `photon [/switch[:arg]]… files…`, executed
-      left-to-right, the same serialisation as batch recipes (Appendix B). Per-
-      image pipeline switches (`/crop /filter /flip /grayscale /negative /resize
-      /rotate /swapcol …`) and application switches (`/help /pref /save /browse
-      …`). Environment variables expand. **`/slide`, `/wallpaper`, `/print` are
-      out.**
+- [x] **Per-command rebinding (keyboard)**: `shortcut_overrides` deltas in
+      `config.ron`, applied over the defaults into `PhotonApp::bindings`; the
+      Settings Shortcuts section captures a key (Esc cancels; the rewritten
+      Ctrl+C/X/V command events map back to shortcuts), conflicts auto-unbind
+      last-wins, Clear/Reset All. Menus and tooltips read the live table.
+      (2026-10-14)
+- [ ] **Mouse-mode mapping**: each button, wheel up/down, double-click → a
+      mouse mode. Deferred to its own pass (2026-10-14) — it restructures the
+      canvas input handling.
+- [x] **Chainable CLI**: `photon [--switch [arg]]… files…`, executed
+      left-to-right, the same serialisation as batch recipes (Appendix B —
+      reskinned to `--` arguments 2026-10-14; POSIX paths start with `/`).
+      Per-image pipeline switches (`--crop --filter --flip --grayscale
+      --mirror --negative --resize --rotate`) and application switches
+      (`--save <path>`, `--settings`, `--help`). Environment variables expand.
+      Ops are transient viewer edits; `--save` writes an explicit output and
+      never touches the input unless named. Two or more file arguments form a
+      transient playlist. (2026-10-14) **`/slide`, `/wallpaper`, `/print` are
+      out**, as are `--browse` (until §7) and the `--save` quality flags
+      (reserved).
 - [ ] Config key inventory to grow: **View** (fit modes, AA, display-while-
       loading, centre, zoom, page navigator); **Scrolling** (smooth scroll,
       step); **Misc** (use-undo, ignore-errors, ask-to-overwrite,
@@ -329,7 +340,7 @@ Mapped onto the existing arcs (`Todo.md`: shader milestones M1–M5).
 6. **Browser** (§7) with the persistent thumbnail cache; then **desktop
    integration** (§11).
 7. **Panorama** (§6).
-8. **CLI + rebinding** (§10) — near-free once §1 exists.
+8. **CLI + rebinding** (§10) — done 2026-10-14 (mouse-mode mapping remains).
 9. **Broad codec expansion** (§8) — JXL, SVG, archives, lossless JPEG, RAW.
 
 The shader arc (`M3` BCn, `M4` HDR/tonemap, `M5` cubemap view, the **GPU test
@@ -374,29 +385,36 @@ bias, amount). In scope for the batch chain (§5):
 **Batch status vocabulary:** *Success / Skipped / Aborted / Failure*, with
 overwrite policy *Yes / Yes-to-all / No / Cancel*.
 
-## Appendix B — parameter text grammar (in-scope switches)
+## Appendix B — parameter text grammar
 
-Text forms decoded from the reference's parsers — the serialisation shared by
-CLI, batch import/export and config.
+One text form shared by the command line and batch import/export, serialised
+through `image_op::to_cli`/`from_cli` (the `ImageOp` vocabulary). Decided
+2026-10-14: the skin is `--` arguments, not the reference's `/switch:arg` —
+POSIX absolute paths start with `/`, and `--` is the platform convention. The
+command line additionally takes `--opt value` as well as `--opt=value`.
 
-- `/depth:(bits,dither)` — dither defaults on. *(Out of scope for ops, but keep
-  the grammar if a format option needs it.)*
-- `/resize:(W,H)` — trailing `%` flips the percent flag; filter defaults to the
-  configured resample filter.
-- `/rotate:Left | Right | 180 | <degrees>` — the three words are the distinct
-  Rotate Left/Right/180 commands; a number is Rotate-Free with an angle and a
-  background-colour parameter.
-- `/swapcol:BGR | RBG | GRB | BRG | GBR`.
-- `/filter:<name>` — the convolution filters above.
-- `/crop:(L,T,R,B)`; `/flip`; `/mirror`; `/grayscale`; `/negative`.
-- `/jpegtran --tran --extra --keeptime --optimize --trim`; transform values
-  `none, flip, mirror, 90, 180, 270`; marker policy `keepall, keepcomment,
-  removeall`.
-- `/panorama --direction --widthmethod/--customwidth
-  --heightmethod/--customheight` with values `fittolargest / fittosmallest /
-  fittofirstimage / custom`.
-- `/save --quality:N --progressive --compression:lzw --showprogress`;
-  `/?` aliases `/help`.
+Implemented, case-insensitive:
+
+- `--rotate left|right|180`; `--flip` (vertical); `--mirror` (horizontal);
+  `--grayscale`; `--negative`.
+- `--resize WxH[:FILTER]` — `1280x0` keeps the aspect; `0x0` is an error; a
+  trailing `%` is rejected. FILTER: `lanczos3` (default), `nearest`,
+  `triangle`, `catmullrom`, `gaussian`.
+- `--filter blur|soften|sharpen|gaussian3|gaussian5|emboss|edge`.
+- `--crop L,T,R,B` — margins trimmed from the edges, clamped.
+
+Command-line application switches (`app/cli.rs`):
+
+- `--save <path>` — writes the transformed first image to an explicit output,
+  format from the extension (png/jpeg/jpg/webp/bmp/tiff). The input is never
+  written unless it is named as the output. Decided 2026-10-14, superseding
+  the reference's flag-only `/save`; quality flags stay reserved.
+- `--settings`; `--help` / `-h`. `--` ends switch parsing.
+
+Reserved (in the reference's grammar, not implemented): percent resize, free
+rotation with an angle + background colour, `/depth:(bits,dither)`,
+`/swapcol`, `/jpegtran`, `/panorama`, `/save --quality:N` style flags.
+Out of scope: `/slide`, `/wallpaper`, `/print` (§12).
 
 ## Open questions (resolve by using the reference, not by guessing)
 

@@ -20,10 +20,10 @@ What's next, in the order I'd do it (full arcs in `Roadmap.md` §13):
    (saver/batch encoder threading), **ICC colour management** (shader arc; the
    `ColorSpace` field is the substrate), and **DPI** (not exposed by `image`
    0.25 — needs a direct `png` dependency and per-format header parsing).
-2. **Chainable CLI + key rebinding** (`Roadmap.md` §10) — near-free now that the
-   §1 spine exists: the switch grammar (`ImageOp::from_cli`/`parse_recipe`) and
-   the registry are in place; what's left is argv parsing + applying ops on
-   open, and a serde-able shortcut table + rebinding UI.
+2. **Mouse-mode mapping** (`Roadmap.md` §10) — each button, wheel up/down,
+   double-click → a mouse mode. The keyboard half of rebinding landed
+   2026-10-14 (Settings → Shortcuts, `shortcut_overrides` in config.ron);
+   the mouse half restructures canvas input handling and wants its own pass.
 3. **Shader M5: cubemap view** and the **normal-map preview** — the remaining
    shader-pass items (M3 BCn and M4 HDR/tonemap both landed 2026-10-13).
 4. **Batch rename + the remaining batch items** (`Roadmap.md` §5) — the
@@ -37,7 +37,8 @@ Done recently (2026-10-12/13): viewing polish (§3), the editing core (§4), the
 batch polish (§5), shader **M3 native BCn + the colour-space model** and
 **M4 HDR + tonemap** (§5b), and the **§1 registry spine** (one `ImageOp`
 vocabulary + the recipe text form + batch recipe import/export) are all
-complete; see the Done log.
+complete; see the Done log. The **§10 chainable CLI + key rebinding** landed
+2026-10-14.
 
 ---
 
@@ -94,11 +95,13 @@ complete; see the Done log.
       shader pass (2026-10-11): oversized images are chunked at the GPU's
       max texture dimension and reassembled in image space; the oversized
       rejection is gone. Remaining limit is RAM for the CPU-side decode.
-- [ ] **Key configuration** — user-configurable shortcut map (config.ron);
-      F11 fullscreen and all others become remappable then. The substrate — the
-      `Command` registry + binding table + `run_command` dispatch — landed
-      2026-10-11 (Roadmap §1 step 1); remaining is the config-file table and a
-      Settings rebinding UI.
+- [x] **Key configuration** — DONE 2026-10-14 (keyboard half, Roadmap §10):
+      `shortcut_overrides` deltas in config.ron applied over the defaults, and
+      the Settings → Shortcuts section (capture-a-key with Esc to cancel,
+      conflicts auto-unbind last-wins, Clear/Reset All). Copy/Paste always
+      answer Ctrl+C/V — egui-winit rewrites those keys into command events —
+      so rebinding manages the extra raw-key binding. The mouse-mode mapping
+      is the remaining half (recommended order item 2).
 - [ ] **Layout persistence** (`UI-DESIGN.md` §1) — panel sizes, open windows
       and splitter positions survive restart via egui memory persistence
       (`persistence` + eframe storage); settings currently carry only app
@@ -302,6 +305,28 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-14 (chainable CLI + key rebinding, Roadmap §10)
+- **`--` command line** (`app/cli.rs`): `photon [--switch [arg]]... files...` —
+  the op chain applies left-to-right through the same `ImageOp` text form as
+  batch recipes (reskinned from `/switch:arg` so both surfaces share one
+  serialisation; `to_cli`/`from_cli`/`recipe_text`/`parse_recipe` changed
+  skin, not semantics). Ops land as transient viewer edits in one undo step;
+  `--save <path>` writes the transformed first image to an explicit output —
+  the input is never touched unless named, and parent/extension are
+  pre-flighted so bad output paths exit before the GUI. `--settings`,
+  `--help`/`-h`; `--` ends switches; `~`/`$VAR` expand (shellexpand). Two or
+  more file arguments form a transient playlist (`load_playlist`: argument
+  order, no walk/sort/watcher); one path keeps the open-with-folder
+  behaviour. Bad invocations exit before the window opens (help → stdout/0,
+  errors → stderr/2).
+- **Key rebinding**: `shortcut_overrides` deltas in config.ron, applied over
+  `default_bindings()` into `PhotonApp::bindings`; Settings → Shortcuts
+  captures a key (Esc cancels; the rewritten Ctrl+C/X/V command events are
+  mapped back to shortcuts), conflicts auto-unbind last-wins, Clear/Reset
+  All. Menus and toolbar tooltips read the live table.
+- Deviation from the plan: `--opt=value` also parses in recipe text — the CLI
+  funnels both spellings through the one shared parser.
 
 ### 2026-10-14 (menu taxonomy + UI design guide + toolbar rewrite)
 - **Menu taxonomy** (Roadmap §1): `MenuGroup::Image` takes the eight pixel
