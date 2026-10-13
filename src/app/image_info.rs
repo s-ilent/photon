@@ -153,14 +153,13 @@ fn dds_colour_depth(format: image_dds::ddsfile::DxgiFormat) -> String {
     }
 }
 
-/// True for the DXGI formats whose stored pixels carry alpha.
+/// True for the DXGI formats with an alpha channel. BC1 is RGB (its optional
+/// 1-bit punch-through is not an alpha channel); the depth label says so.
 fn dds_has_alpha(format: image_dds::ddsfile::DxgiFormat) -> bool {
     use image_dds::ddsfile::DxgiFormat::*;
     matches!(
         format,
-        BC1_UNorm
-            | BC1_UNorm_sRGB
-            | BC2_UNorm
+        BC2_UNorm
             | BC2_UNorm_sRGB
             | BC3_UNorm
             | BC3_UNorm_sRGB
@@ -332,6 +331,67 @@ mod tests {
         assert_eq!(info.colour_depth, "RGBA, 8-bit/channel (block-compressed)");
         assert!(info.alpha);
         assert!(info.exif.is_none());
+    }
+
+    /// A JPEG probe: RGB8 source, no Exif (the `image` encoder writes none).
+    #[test]
+    fn probe_reads_a_jpeg() {
+        use ::image::codecs::jpeg::JpegEncoder;
+        use ::image::{ExtendedColorType, ImageEncoder};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("shot.jpg");
+        let mut bytes = Vec::new();
+        JpegEncoder::new(&mut bytes)
+            .write_image(&[9, 8, 7], 1, 1, ExtendedColorType::Rgb8)
+            .expect("encode jpeg");
+        std::fs::write(&path, bytes).expect("write");
+
+        let info = probe(&path).expect("probe ok");
+        assert_eq!(info.format, "Jpeg");
+        assert_eq!((info.width, info.height), (1, 1));
+        assert_eq!(info.colour_depth, "RGB, 8-bit/channel");
+        assert!(!info.alpha);
+        assert!(info.exif.is_none());
+        assert!(info.file_size > 0);
+    }
+
+    /// The DDS branch across the compression families the renderer supports.
+    #[test]
+    fn probe_dds_reports_each_compression_family() {
+        use image_dds::ddsfile::{D3D10ResourceDimension, DxgiFormat, Dds, NewDxgiParams};
+
+        let cases = [
+            (DxgiFormat::BC1_UNorm, "BC1 (DXT1)", false),
+            (DxgiFormat::BC5_UNorm, "BC5", false),
+            (DxgiFormat::BC7_UNorm, "BC7", true),
+            (DxgiFormat::R8G8B8A8_UNorm, "uncompressed", true),
+        ];
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (format, label, alpha) in cases {
+            let path = dir.path().join(format!("{label}.dds").replace(['(', ')', ' '], "_"));
+            let mut dds = Dds::new_dxgi(NewDxgiParams {
+                height: 8,
+                width: 8,
+                depth: None,
+                format,
+                mipmap_levels: Some(1),
+                array_layers: None,
+                caps2: None,
+                is_cubemap: false,
+                resource_dimension: D3D10ResourceDimension::Texture2D,
+                alpha_mode: image_dds::ddsfile::AlphaMode::Unknown,
+            })
+            .expect("build dds");
+            dds.data = vec![0; 8 * 8 * 4];
+            let mut file = std::fs::File::create(&path).expect("create");
+            dds.write(&mut file).expect("write dds");
+            drop(file);
+
+            let info = probe(&path).expect("probe ok");
+            assert_eq!(info.dds_compression.as_deref(), Some(label), "{format:?}");
+            assert_eq!(info.alpha, alpha, "{format:?} alpha");
+            assert_eq!((info.width, info.height), (8, 8), "{format:?}");
+        }
     }
 
     #[test]
