@@ -196,6 +196,18 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
       data-control path functions; still worth one manual cross-app test
       (Photon → GIMP/Krita and back) to confirm other apps accept our image
       MIME offers. Fallbacks if broken: XWayland or wl-clipboard-rs.
+- [ ] **Generated fixture set for the Image Information window** (§9) —
+      deferred 2026-10-14: manual passes use the user's own images, so this is
+      backlog. A generated folder with known header values (plain/palette/16-bit
+      PNG, Exif+ICC+XMP JPEG, HDR, DXT5 DDS) so the window's rows can be checked
+      against exact expected values. Generator kept at
+      `scratch/make_info_fixtures.py` (PIL + numpy); it encodes the gotchas —
+      Exif rationals need `PIL.TiffImagePlugin.IFDRational` (`fractions.Fraction`
+      silently serialises as UNDEFINED), and a `.hdr` needs new-style RLE
+      scanlines. Still missing: cubemap/array DDS, which want a throwaway Rust
+      example built on `image_dds::ddsfile` (mirroring the in-memory builders in
+      the `image_loader.rs` tests); PIL's `iptc=` kwarg did not emit an APP13
+      block, so the fixture's IPTC row reads "none".
 
 ## Dependency notes
 
