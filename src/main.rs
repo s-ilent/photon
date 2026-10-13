@@ -58,11 +58,17 @@ impl eframe::App for app::PhotonApp {
             self.ui_settings_window(&ctx);
         }
 
+        // 0. Image Information Window
+        if self.info_open {
+            self.ui_info_window(&ctx);
+        }
+
         // Check for completed background loads
         self.check_load_complete(&ctx);
         self.check_dir_load_complete();
         self.check_dir_watch();
         self.check_save_status(&ctx);
+        self.check_image_info();
 
         // Persist settings when they changed this frame
         self.save_config_if_changed();

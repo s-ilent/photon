@@ -21,6 +21,7 @@ pub(crate) enum Command {
     Copy,
     Paste,
     OpenBatchConvert,
+    ImageInformation,
     CycleMouseMode,
     NextImage,
     PrevImage,
@@ -56,7 +57,8 @@ impl Command {
             | Command::SaveImageAs
             | Command::Copy
             | Command::Paste
-            | Command::OpenBatchConvert => MenuGroup::File,
+            | Command::OpenBatchConvert
+            | Command::ImageInformation => MenuGroup::File,
             Command::RotateLeft
             | Command::RotateRight
             | Command::Rotate180
@@ -85,6 +87,7 @@ impl Command {
             Command::Copy,
             Command::Paste,
             Command::OpenBatchConvert,
+            Command::ImageInformation,
             Command::CycleMouseMode,
             Command::NextImage,
             Command::PrevImage,
@@ -110,6 +113,7 @@ impl Command {
             Command::Copy => "Copy",
             Command::Paste => "Paste",
             Command::OpenBatchConvert => "Convert…",
+            Command::ImageInformation => "Image Information…",
             Command::CycleMouseMode => "Cycle Mouse Mode",
             Command::NextImage => "Next Image",
             Command::PrevImage => "Previous Image",
@@ -139,6 +143,7 @@ impl Command {
             Command::Copy => "copy",
             Command::Paste => "paste",
             Command::OpenBatchConvert => "convert",
+            Command::ImageInformation => "info",
             Command::CycleMouseMode => "mouse-mode",
             Command::NextImage => "next",
             Command::PrevImage => "prev",
@@ -169,7 +174,7 @@ impl Command {
 pub(crate) fn default_bindings() -> &'static [(Command, Option<egui::KeyboardShortcut>)] {
     use egui::{Key, KeyboardShortcut, Modifiers};
 
-    static BINDINGS: [(Command, Option<KeyboardShortcut>); 22] = [
+    static BINDINGS: [(Command, Option<KeyboardShortcut>); 23] = [
         (
             Command::Open,
             Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::O)),
@@ -229,6 +234,10 @@ pub(crate) fn default_bindings() -> &'static [(Command, Option<egui::KeyboardSho
         // Menu-only edits carry a `None` row so the "every command has a row"
         // invariant holds without binding a key.
         (Command::OpenBatchConvert, None),
+        (
+            Command::ImageInformation,
+            Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::I)),
+        ),
         (Command::RotateLeft, None),
         (Command::RotateRight, None),
         (Command::Rotate180, None),
@@ -269,6 +278,7 @@ impl PhotonApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
             }
             Command::OpenBatchConvert => self.batch.open = true,
+            Command::ImageInformation => self.info_open = true,
             Command::RotateLeft => self.apply_edit(ImageOp::RotateLeft),
             Command::RotateRight => self.apply_edit(ImageOp::RotateRight),
             Command::Rotate180 => self.apply_edit(ImageOp::Rotate180),
@@ -295,6 +305,7 @@ impl PhotonApp {
             Command::UndoEdit => self.edit_undo.can_undo(),
             Command::RedoEdit => self.edit_undo.can_redo(),
             Command::CropToSelection => has_image && self.selection_image_rect.is_some(),
+            Command::ImageInformation => self.target_path.is_some(),
             Command::SaveImageAs
             | Command::RotateLeft
             | Command::RotateRight
@@ -380,6 +391,7 @@ mod tests {
     fn pixel_edits_disabled_without_an_image() {
         let app = PhotonApp::new();
         for command in [
+            Command::ImageInformation,
             Command::RotateLeft,
             Command::RotateRight,
             Command::Rotate180,

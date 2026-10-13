@@ -28,6 +28,8 @@ pub(crate) mod edit;
 // transforms the editor and the batch chain both apply, with the Appendix-B
 // text form that recipes and the CLI serialise to.
 pub(crate) mod image_op;
+// Headers-only metadata probe behind the Image Information window (Roadmap §9).
+pub(crate) mod image_info;
 pub(crate) mod settings;
 // Dracula palette + theme setup; the palette consts are shared with the UI
 // modules (sidebar, overlay).
@@ -229,6 +231,11 @@ pub struct PhotonApp {
     /// True when the displayed image is a float/HDR source (tonemapped in the
     /// shader); shown in the info bar.
     pub(crate) current_hdr: bool,
+    /// Image Information window state (Roadmap.md §9): open flag, the finished
+    /// probe for the displayed target, and the probe still in flight.
+    pub(crate) info_open: bool,
+    pub(crate) image_info: Option<(PathBuf, Result<image_info::ImageInfo, String>)>,
+    pub(crate) info_probe: Option<(PathBuf, Receiver<Result<image_info::ImageInfo, String>>)>,
     pub(crate) zoom: f32,
     pub(crate) pan: egui::Vec2,
     pub(crate) selection: Option<egui::Rect>,
@@ -316,6 +323,9 @@ impl PhotonApp {
             image_dimensions: None,
             current_color_space: None,
             current_hdr: false,
+            info_open: false,
+            image_info: None,
+            info_probe: None,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             selection: None,
