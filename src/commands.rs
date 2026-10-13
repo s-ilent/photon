@@ -9,7 +9,7 @@
 //! This first step deliberately stops at routing the existing keyboard
 //! shortcuts: no params, no enable predicates, no CLI parser yet.
 
-use crate::app::edit::EditOp;
+use crate::app::image_op::ImageOp;
 use crate::app::PhotonApp;
 use eframe::egui;
 
@@ -269,14 +269,18 @@ impl PhotonApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
             }
             Command::OpenBatchConvert => self.batch.open = true,
-            Command::RotateLeft => self.apply_edit(EditOp::RotateLeft),
-            Command::RotateRight => self.apply_edit(EditOp::RotateRight),
-            Command::Rotate180 => self.apply_edit(EditOp::Rotate180),
-            Command::FlipHorizontal => self.apply_edit(EditOp::FlipHorizontal),
-            Command::FlipVertical => self.apply_edit(EditOp::FlipVertical),
-            Command::CropToSelection => self.apply_edit(EditOp::Crop),
-            Command::Grayscale => self.apply_edit(EditOp::Grayscale),
-            Command::Negative => self.apply_edit(EditOp::Negative),
+            Command::RotateLeft => self.apply_edit(ImageOp::RotateLeft),
+            Command::RotateRight => self.apply_edit(ImageOp::RotateRight),
+            Command::Rotate180 => self.apply_edit(ImageOp::Rotate180),
+            Command::FlipHorizontal => self.apply_edit(ImageOp::FlipHorizontal),
+            Command::FlipVertical => self.apply_edit(ImageOp::FlipVertical),
+            Command::CropToSelection => {
+                if let Some(op) = self.crop_op_from_selection() {
+                    self.apply_edit(op);
+                }
+            }
+            Command::Grayscale => self.apply_edit(ImageOp::Grayscale),
+            Command::Negative => self.apply_edit(ImageOp::Negative),
             Command::UndoEdit => self.undo_edit(),
             Command::RedoEdit => self.redo_edit(),
         }

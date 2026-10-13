@@ -1,4 +1,5 @@
-use crate::app::edit::{self, EditOp};
+use crate::app::edit;
+use crate::app::image_op::{self, ImageOp};
 use crate::app::view;
 use crate::app::{HoveredPixel, MouseMode, PhotonApp, StatusOverlay};
 use eframe::egui;
@@ -342,32 +343,21 @@ impl PhotonApp {
         self.edit_undo = edit::UndoStack::new();
     }
 
-    /// Apply one edit to the displayed image and re-upload it.
-    pub(crate) fn apply_edit(&mut self, op: EditOp) {
+    /// Apply one edit to the displayed image and re-upload it. The op is the
+    /// shared [`ImageOp`] vocabulary, so the editor and the batch chain run the
+    /// same implementation.
+    pub(crate) fn apply_edit(&mut self, op: ImageOp) {
         let Some((pixels, width, height)) = crate::app::clipboard::current_rgba(self) else {
             return;
         };
-        let src = edit::Rgba::new(pixels, width, height);
-        let out = match op {
-            EditOp::RotateLeft => src.rotate270(),
-            EditOp::RotateRight => src.rotate90(),
-            EditOp::Rotate180 => src.rotate180(),
-            EditOp::FlipHorizontal => src.flip_horizontal(),
-            EditOp::FlipVertical => src.flip_vertical(),
-            EditOp::Grayscale => src.grayscale(),
-            EditOp::Negative => src.negative(),
-            EditOp::Crop => {
-                let Some(rect) = self.crop_rect_from_selection() else {
-                    return;
-                };
-                src.crop(rect)
-            }
-        };
-
         // Seed the history with the pre-edit state so the first edit is
         // undoable, then record the result as the new current state.
+        let src = edit::Rgba::new(pixels.clone(), width, height);
+        let (out, out_w, out_h) = image_op::apply(pixels, width, height, &[op]);
+        let out = edit::Rgba::new(out, out_w, out_h);
+
         if self.edit_undo.is_empty() {
-            self.edit_undo.push(src.clone());
+            self.edit_undo.push(src);
         }
         self.edit_undo.push(out.clone());
         self.show_edited(out);
@@ -385,20 +375,24 @@ impl PhotonApp {
         }
     }
 
-    /// The current selection as an image-space crop rectangle, if any. Empty or
-    /// degenerate selections are rejected (a crop needs a positive extent).
-    fn crop_rect_from_selection(&self) -> Option<edit::CropRect> {
+    /// The current selection as a crop op (margins, matching `/crop:(L,T,R,B)`),
+    /// if any. Empty or degenerate selections are rejected (a crop needs a
+    /// positive extent).
+    pub(crate) fn crop_op_from_selection(&self) -> Option<ImageOp> {
         let sel = self.selection_image_rect?;
-        let width = sel.width().max(0.0).round() as u32;
-        let height = sel.height().max(0.0).round() as u32;
-        if width == 0 || height == 0 {
+        let (img_w, img_h) = self.image_dimensions?;
+        let x0 = (sel.min.x.max(0.0).round() as u32).min(img_w);
+        let y0 = (sel.min.y.max(0.0).round() as u32).min(img_h);
+        let x1 = (sel.max.x.max(0.0).round() as u32).min(img_w);
+        let y1 = (sel.max.y.max(0.0).round() as u32).min(img_h);
+        if x1 <= x0 || y1 <= y0 {
             return None;
         }
-        Some(edit::CropRect {
-            x: sel.min.x.max(0.0).round() as u32,
-            y: sel.min.y.max(0.0).round() as u32,
-            width,
-            height,
+        Some(ImageOp::Crop {
+            left: x0,
+            top: y0,
+            right: img_w - x1,
+            bottom: img_h - y1,
         })
     }
 

@@ -5,9 +5,9 @@
 //! reporting through the `BatchMessage` channel drained in `check_batch_status`.
 
 use crate::app::batch::{
-    self, ConversionJob, FileStatus, FilterKind, Operation, OutputFormat, OverwritePolicy,
-    ResampleFilter, SaveOptions,
+    self, ConversionJob, FileStatus, OutputFormat, OverwritePolicy, SaveOptions,
 };
+use crate::app::image_op::{self, FilterKind, ImageOp, ResampleFilter};
 use crate::app::{BatchMessage, BatchState, PhotonApp};
 use eframe::egui;
 use egui_phosphor::regular as icons;
@@ -65,21 +65,21 @@ impl OperationChoice {
     /// Build the engine operation for this choice. `width`/`height` of `0` mean
     /// "auto" (keep aspect ratio); a resize with both unset is a no-op and
     /// returns `None` so the UI doesn't queue a step that does nothing.
-    fn to_operation(self, width: u32, height: u32, filter: ResampleFilter) -> Option<Operation> {
+    fn to_operation(self, width: u32, height: u32, filter: ResampleFilter) -> Option<ImageOp> {
         Some(match self {
-            OperationChoice::Rotate90 => Operation::Rotate90,
-            OperationChoice::Rotate180 => Operation::Rotate180,
-            OperationChoice::Rotate270 => Operation::Rotate270,
-            OperationChoice::FlipHorizontal => Operation::FlipHorizontal,
-            OperationChoice::FlipVertical => Operation::FlipVertical,
-            OperationChoice::Grayscale => Operation::Grayscale,
-            OperationChoice::Negative => Operation::Negative,
-            OperationChoice::Filter(kind) => Operation::Filter(kind),
+            OperationChoice::Rotate90 => ImageOp::RotateRight,
+            OperationChoice::Rotate180 => ImageOp::Rotate180,
+            OperationChoice::Rotate270 => ImageOp::RotateLeft,
+            OperationChoice::FlipHorizontal => ImageOp::FlipHorizontal,
+            OperationChoice::FlipVertical => ImageOp::FlipVertical,
+            OperationChoice::Grayscale => ImageOp::Grayscale,
+            OperationChoice::Negative => ImageOp::Negative,
+            OperationChoice::Filter(kind) => ImageOp::Filter(kind),
             OperationChoice::Resize => {
                 if width == 0 && height == 0 {
                     return None;
                 }
-                Operation::Resize {
+                ImageOp::Resize {
                     width: (width != 0).then_some(width),
                     height: (height != 0).then_some(height),
                     filter,
@@ -99,17 +99,23 @@ fn filter_label(filter: ResampleFilter) -> &'static str {
     }
 }
 
-fn operation_label(op: &Operation) -> String {
+fn operation_label(op: &ImageOp) -> String {
     match op {
-        Operation::Rotate90 => "Rotate 90".to_string(),
-        Operation::Rotate180 => "Rotate 180".to_string(),
-        Operation::Rotate270 => "Rotate 270".to_string(),
-        Operation::FlipHorizontal => "Flip horizontal".to_string(),
-        Operation::FlipVertical => "Flip vertical".to_string(),
-        Operation::Grayscale => "Grayscale".to_string(),
-        Operation::Negative => "Negative".to_string(),
-        Operation::Filter(kind) => kind.label().to_string(),
-        Operation::Resize {
+        ImageOp::RotateRight => "Rotate 90".to_string(),
+        ImageOp::Rotate180 => "Rotate 180".to_string(),
+        ImageOp::RotateLeft => "Rotate 270".to_string(),
+        ImageOp::FlipHorizontal => "Flip horizontal".to_string(),
+        ImageOp::FlipVertical => "Flip vertical".to_string(),
+        ImageOp::Grayscale => "Grayscale".to_string(),
+        ImageOp::Negative => "Negative".to_string(),
+        ImageOp::Filter(kind) => kind.label().to_string(),
+        ImageOp::Crop {
+            left,
+            top,
+            right,
+            bottom,
+        } => format!("Crop {left},{top},{right},{bottom}"),
+        ImageOp::Resize {
             width,
             height,
             filter,
@@ -159,7 +165,7 @@ fn build_jobs(
     files: &[PathBuf],
     target_dir: &Path,
     format: OutputFormat,
-    operations: &[Operation],
+    operations: &[ImageOp],
 ) -> Vec<ConversionJob> {
     files
         .iter()
@@ -271,6 +277,8 @@ fn batch_window_body(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBu
     output_section(ui, batch);
     ui.separator();
     operations_section(ui, batch);
+    ui.separator();
+    recipe_section(ui, batch);
     ui.separator();
     run_section(ui, batch);
 }
@@ -406,7 +414,7 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
             if ui.small_button(icons::X).clicked() {
                 remove_op = Some(index);
             }
-            ui.label(operation_label(op));
+            ui.label(operation_label(op)).on_hover_text(op.to_cli());
         });
     }
     if let Some(index) = remove_op {
@@ -454,6 +462,52 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     ui.label("Resize W/H 0 = keep aspect ratio.");
 }
 
+/// The operation chain as recipe text (the form the CLI shares), with
+/// clipboard export/import. There is deliberately no text field: the app takes
+/// Ctrl+C/V at the input layer (see `input.rs`), so a TextEdit would never see
+/// it — the clipboard in/out sidesteps that.
+fn recipe_section(ui: &mut egui::Ui, batch: &mut BatchState) {
+    ui.label("Recipe (shared with the CLI):");
+    let text = image_op::recipe_text(&batch.operations);
+    ui.monospace(if text.is_empty() { "(empty)" } else { &text });
+    ui.horizontal(|ui| {
+        if ui.button("Copy recipe").clicked() && !text.is_empty() {
+            ui.ctx().copy_text(text.clone());
+        }
+        if ui.button("Import from clipboard").clicked() {
+            match import_recipe_from_clipboard() {
+                Ok(ops) => {
+                    batch.operations = ops;
+                    batch.recipe_error = None;
+                }
+                Err(e) => batch.recipe_error = Some(e),
+            }
+        }
+    });
+    if let Some(error) = &batch.recipe_error {
+        ui.label(error);
+    }
+}
+
+/// Read the clipboard and parse it as a recipe chain.
+fn import_recipe_from_clipboard() -> Result<Vec<ImageOp>, String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
+    let text = clipboard
+        .get_text()
+        .map_err(|e| format!("no text on the clipboard: {e}"))?;
+    import_recipe(&text)
+}
+
+/// Parse clipboard text into a chain. Blank text is an error — an empty recipe
+/// is reachable via an empty chain, not by pasting nothing.
+fn import_recipe(text: &str) -> Result<Vec<ImageOp>, String> {
+    if text.trim().is_empty() {
+        return Err("the clipboard has no recipe text".to_string());
+    }
+    image_op::parse_recipe(text)
+}
+
 fn run_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     let can_run = !batch.running && !batch.files.is_empty() && batch.output_dir.is_some();
     ui.horizontal(|ui| {
@@ -488,8 +542,8 @@ fn run_section(ui: &mut egui::Ui, batch: &mut BatchState) {
 mod tests {
     use super::*;
 
-    fn sample_op() -> Operation {
-        Operation::Resize {
+    fn sample_op() -> ImageOp {
+        ImageOp::Resize {
             width: Some(100),
             height: None,
             filter: ResampleFilter::Lanczos3,
@@ -499,7 +553,7 @@ mod tests {
     #[test]
     fn build_jobs_maps_every_file_with_shared_settings() {
         let files = vec![PathBuf::from("/in/a.png"), PathBuf::from("/in/b.jpg")];
-        let ops = vec![Operation::Grayscale, sample_op()];
+        let ops = vec![ImageOp::Grayscale, sample_op()];
         let jobs = build_jobs(&files, Path::new("/out"), OutputFormat::Jpeg, &ops);
 
         assert_eq!(jobs.len(), 2);
@@ -562,7 +616,7 @@ mod tests {
         );
         assert_eq!(
             OperationChoice::Grayscale.to_operation(0, 0, ResampleFilter::Nearest),
-            Some(Operation::Grayscale)
+            Some(ImageOp::Grayscale)
         );
     }
 
@@ -579,10 +633,22 @@ mod tests {
         ] {
             assert_eq!(
                 OperationChoice::Filter(kind).to_operation(0, 0, ResampleFilter::Nearest),
-                Some(Operation::Filter(kind)),
+                Some(ImageOp::Filter(kind)),
                 "{kind:?} should build a Filter operation"
             );
         }
+    }
+
+    #[test]
+    fn import_recipe_rejects_blank_text_but_parses_chains() {
+        assert_eq!(
+            import_recipe("   "),
+            Err("the clipboard has no recipe text".to_string())
+        );
+        assert_eq!(
+            import_recipe("/rotate:right /negative"),
+            Ok(vec![ImageOp::RotateRight, ImageOp::Negative])
+        );
     }
 
     #[test]

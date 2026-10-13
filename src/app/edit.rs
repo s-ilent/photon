@@ -187,20 +187,6 @@ impl Rgba {
     }
 }
 
-/// A single whole-image edit (Roadmap §4), in the form the menu and command
-/// registry dispatch. Crop reads the current selection at the call site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EditOp {
-    RotateLeft,
-    RotateRight,
-    Rotate180,
-    FlipHorizontal,
-    FlipVertical,
-    Crop,
-    Grayscale,
-    Negative,
-}
-
 /// Maximum number of whole-image snapshots retained by [`UndoStack`]. Past this
 /// the oldest state is evicted, bounding memory to `UNDO_LIMIT ×` one image.
 pub(crate) const UNDO_LIMIT: usize = 32;

@@ -24,6 +24,10 @@ pub(crate) mod batch;
 // Interactive editing ops + undo (Roadmap.md §4) — applied from the canvas,
 // which re-uploads the result on the main thread.
 pub(crate) mod edit;
+// The shared operation vocabulary (Roadmap.md §1): one ImageOp enum for the
+// transforms the editor and the batch chain both apply, with the Appendix-B
+// text form that recipes and the CLI serialise to.
+pub(crate) mod image_op;
 pub(crate) mod settings;
 // Dracula palette + theme setup; the palette consts are shared with the UI
 // modules (sidebar, overlay).
@@ -119,7 +123,7 @@ pub(crate) struct BatchState {
     /// What to do when a target file already exists.
     pub(crate) overwrite: batch::OverwritePolicy,
     /// The operation chain applied to every file, in order.
-    pub(crate) operations: Vec<batch::Operation>,
+    pub(crate) operations: Vec<image_op::ImageOp>,
     /// Per-file status rows, parallel to `files`. `None` before a run and for
     /// files the worker has not reported yet.
     pub(crate) statuses: Vec<Option<batch::FileStatus>>,
@@ -129,6 +133,9 @@ pub(crate) struct BatchState {
     pub(crate) running: bool,
     /// `(done, total)` files for the running batch, for the progress bar.
     pub(crate) progress: (usize, usize),
+    /// Last recipe-import failure, shown in the Convert window until a later
+    /// import succeeds.
+    pub(crate) recipe_error: Option<String>,
     /// UI scratch: index into the "add step" combo's choice list.
     pub(crate) pending_op: usize,
     /// UI scratch: pending resize width (`0` = keep aspect ratio).
@@ -136,7 +143,7 @@ pub(crate) struct BatchState {
     /// UI scratch: pending resize height (`0` = keep aspect ratio).
     pub(crate) resize_height: u32,
     /// UI scratch: pending resize kernel.
-    pub(crate) resize_filter: batch::ResampleFilter,
+    pub(crate) resize_filter: image_op::ResampleFilter,
 }
 
 impl Default for BatchState {
@@ -153,10 +160,11 @@ impl Default for BatchState {
             receiver: None,
             running: false,
             progress: (0, 0),
+            recipe_error: None,
             pending_op: 0,
             resize_width: 0,
             resize_height: 0,
-            resize_filter: batch::ResampleFilter::Lanczos3,
+            resize_filter: image_op::ResampleFilter::Lanczos3,
         }
     }
 }
