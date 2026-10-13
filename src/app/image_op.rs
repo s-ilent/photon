@@ -370,7 +370,7 @@ fn apply_one(img: Rgba, op: &ImageOp) -> Rgba {
             filter,
         } => match target_dimensions(img.width, img.height, *width, *height) {
             Some((tw, th)) => {
-                let src = as_image(&img);
+                let src = into_image(img);
                 let out = imageops::resize(&src, tw, th, filter.to_filter_type());
                 Rgba::new(out.into_raw(), tw, th)
             }
@@ -378,7 +378,7 @@ fn apply_one(img: Rgba, op: &ImageOp) -> Rgba {
         },
         ImageOp::Filter(kind) => {
             let (kernel, k, divisor, bias) = kind.parameters();
-            let src = as_image(&img);
+            let src = into_image(img);
             let out = convolve(&src, kernel, k, divisor, bias);
             Rgba::new(out.into_raw(), src.width(), src.height())
         }
@@ -401,8 +401,8 @@ fn apply_one(img: Rgba, op: &ImageOp) -> Rgba {
     }
 }
 
-fn as_image(img: &Rgba) -> RgbaImage {
-    RgbaImage::from_raw(img.width, img.height, img.pixels.clone())
+fn into_image(img: Rgba) -> RgbaImage {
+    RgbaImage::from_raw(img.width, img.height, img.pixels)
         .expect("RGBA buffer length was validated against the dimensions")
 }
 

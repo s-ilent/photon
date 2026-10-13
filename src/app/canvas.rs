@@ -352,12 +352,15 @@ impl PhotonApp {
         };
         // Seed the history with the pre-edit state so the first edit is
         // undoable, then record the result as the new current state.
-        let src = edit::Rgba::new(pixels.clone(), width, height);
+        let seed = self
+            .edit_undo
+            .is_empty()
+            .then(|| edit::Rgba::new(pixels.clone(), width, height));
         let (out, out_w, out_h) = image_op::apply(pixels, width, height, &[op]);
         let out = edit::Rgba::new(out, out_w, out_h);
 
-        if self.edit_undo.is_empty() {
-            self.edit_undo.push(src);
+        if let Some(seed) = seed {
+            self.edit_undo.push(seed);
         }
         self.edit_undo.push(out.clone());
         self.show_edited(out);

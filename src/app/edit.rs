@@ -163,8 +163,8 @@ impl Rgba {
 
     /// Integer-luma grayscale (Appendix A): `gray = (77·R + 150·G + 29·B) >> 8`.
     /// Alpha is preserved.
-    pub(crate) fn grayscale(&self) -> Rgba {
-        let mut out = self.pixels.clone();
+    pub(crate) fn grayscale(mut self) -> Rgba {
+        let out = &mut self.pixels;
         for px in out.as_chunks_mut::<4>().0 {
             let gray =
                 ((77u32 * px[0] as u32 + 150u32 * px[1] as u32 + 29u32 * px[2] as u32) >> 8) as u8;
@@ -172,18 +172,17 @@ impl Rgba {
             px[1] = gray;
             px[2] = gray;
         }
-        Rgba::new(out, self.width, self.height)
+        self
     }
 
     /// Invert R, G and B. Alpha is preserved; it is not an alpha inversion.
-    pub(crate) fn negative(&self) -> Rgba {
-        let mut out = self.pixels.clone();
-        for px in out.as_chunks_mut::<4>().0 {
+    pub(crate) fn negative(mut self) -> Rgba {
+        for px in self.pixels.as_chunks_mut::<4>().0 {
             px[0] = 255 - px[0];
             px[1] = 255 - px[1];
             px[2] = 255 - px[2];
         }
-        Rgba::new(out, self.width, self.height)
+        self
     }
 }
 
