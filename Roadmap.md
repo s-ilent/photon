@@ -65,6 +65,11 @@ This is *the* prerequisite: key-rebinding (§10), the CLI (§10) and batch (§5)
 are all just this registry driven from different sources. Build it first.
 
 - [x] `Command { id, name, cli_name, enable: fn(&AppState) -> bool, run }` + registry table. *(2026-10-11: `Command` + `default_bindings` + `run_command`; 2026-10-12: `MenuGroup`/`command_enabled` driving the menu bar.)*
+- [x] Menu presentation layer: File/Edit/Image/View taxonomy with section
+      separators, all registry-driven; `UI-DESIGN.md` is the interface design
+      authority (layout, menu placement rules, controls, dialogs,
+      immediate-mode discipline). *(2026-10-14: `MenuGroup::Image`, Copy/Paste
+      → Edit, `starts_menu_section`, `MenuGroup::ALL`/`title()`.)*
 - [ ] Route menu, shortcuts, CLI and batch through the registry. *(Menu, shortcuts and batch are routed; the CLI is not yet.)*
 - [x] Per-command params as a serialisable struct with `to_cli()` / `from_cli()` —
       the one text form shared by config, batch recipes and the CLI. *(2026-10-13:

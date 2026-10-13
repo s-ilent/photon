@@ -99,6 +99,10 @@ complete; see the Done log.
       `Command` registry + binding table + `run_command` dispatch — landed
       2026-10-11 (Roadmap §1 step 1); remaining is the config-file table and a
       Settings rebinding UI.
+- [ ] **Layout persistence** (`UI-DESIGN.md` §1) — panel sizes, open windows
+      and splitter positions survive restart via egui memory persistence
+      (`persistence` + eframe storage); settings currently carry only app
+      options, not layout.
 - [x] **Exif auto-rotate on load** (`Roadmap.md` §3) — DONE 2026-10-11: applied
       at decode in `image_loader.rs` via the `image` crate's
       `into_decoder`/`orientation`/`apply_orientation` (no new dep); dimensions
@@ -185,6 +189,11 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
 
 ## Deferred / needs a spec
 
+- [ ] **UI component kit** (`ui/kit.rs`, `UI-DESIGN.md` §4) — shared helpers so
+      dialogs stop hand-assembling widgets: Grid form rows (right-aligned
+      labels + colon), dialog scaffolding with live-preview panes, destructive
+      buttons, empty states. Introduce when the next dialog (Filter preview,
+      batch rename) needs them, and migrate the Settings/Batch windows then.
 - [ ] **Property map mode for lightramp setup** — proposed extra mouse/view
       mode; needs a spec before implementation.
 - [ ] **Logging console UI** — `egui_logger 0.10.1` widget if we ever want
@@ -195,6 +204,12 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
 
 ## Verify
 
+- [ ] **Menu reorg click-through** (2026-10-14) — menus are now File (Open…,
+      Save As… | Convert…, Image Information…), Edit (Undo/Redo | Copy/Paste),
+      Image (Rotate ×3 | Flip ×2, Crop | Grayscale, Negative), View (Next/Prev
+      | Cycle Mouse Mode, Fullscreen | Lock Zoom | window-fit actions) with
+      section separators; shortcuts and toolbar unchanged. Confirm every item
+      still dispatches and enables/disables as before.
 - [ ] **Image copy/paste across apps on Wayland** — Sophia's notes claim
       arboard is "text-only on Wayland". Evidence update 2026-10-11: Photon's
       app-internal copy→paste works on this Wayland session (buttons), so the

@@ -4,20 +4,20 @@ use eframe::egui;
 use egui_phosphor::regular as icons;
 
 impl app::PhotonApp {
-    /// Top menu bar (File / Edit / View). Driven by the command registry: the
-    /// items and their enable state come from [`Command::all`], so a new command
-    /// joins a menu just by declaring its [`MenuGroup`] (Roadmap §1).
+    /// Top menu bar (File / Edit / Image / View), driven by the command
+    /// registry: the groups come from [`MenuGroup::ALL`], the items and their
+    /// enable state from [`Command::all`], so a new command joins a menu just
+    /// by declaring its [`MenuGroup`] (Roadmap §1).
     pub(crate) fn ui_menu_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         egui::MenuBar::new().ui(ui, |ui| {
-            for (title, group) in [
-                ("File", MenuGroup::File),
-                ("Edit", MenuGroup::Edit),
-                ("View", MenuGroup::View),
-            ] {
-                ui.menu_button(title, |ui| {
+            for group in MenuGroup::ALL {
+                ui.menu_button(group.title(), |ui| {
                     for &command in Command::all() {
                         if command.menu_group() != group {
                             continue;
+                        }
+                        if command.starts_menu_section() {
+                            ui.separator();
                         }
                         if ui
                             .add_enabled(

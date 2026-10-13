@@ -39,26 +39,52 @@ pub(crate) enum Command {
     RedoEdit,
 }
 
-/// Top-level menu a [`Command`] appears under. The menu bar iterates
-/// [`Command::all`] and dispatches by group, so a new command joins a menu just
-/// by returning its group here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Top-level menu a [`Command`] appears under. The menu bar renders the groups
+/// in [`MenuGroup::ALL`] order; within a group, [`Command::all`] is
+/// presentation order and [`Command::starts_menu_section`] places the
+/// separators. A new command joins a menu just by returning its group here
+/// (placement rules: UI-DESIGN.md §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum MenuGroup {
     File,
     Edit,
+    Image,
     View,
 }
 
+impl MenuGroup {
+    /// Every group, in menu-bar order. Variant order is presentation order.
+    pub(crate) const ALL: [MenuGroup; 4] = [
+        MenuGroup::File,
+        MenuGroup::Edit,
+        MenuGroup::Image,
+        MenuGroup::View,
+    ];
+
+    /// The menu-bar title for this group.
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            MenuGroup::File => "File",
+            MenuGroup::Edit => "Edit",
+            MenuGroup::Image => "Image",
+            MenuGroup::View => "View",
+        }
+    }
+}
+
 impl Command {
-    /// The menu bar group this command belongs to.
+    /// The menu bar group this command belongs to. Taxonomy: files and tool
+    /// windows are File, edit history and clipboard are Edit, changes to the
+    /// current image's pixels are Image, viewport/app state is View.
     pub(crate) fn menu_group(&self) -> MenuGroup {
         match self {
             Command::Open
             | Command::SaveImageAs
-            | Command::Copy
-            | Command::Paste
             | Command::OpenBatchConvert
             | Command::ImageInformation => MenuGroup::File,
+            Command::UndoEdit | Command::RedoEdit | Command::Copy | Command::Paste => {
+                MenuGroup::Edit
+            }
             Command::RotateLeft
             | Command::RotateRight
             | Command::Rotate180
@@ -66,32 +92,44 @@ impl Command {
             | Command::FlipVertical
             | Command::CropToSelection
             | Command::Grayscale
-            | Command::Negative
-            | Command::UndoEdit
-            | Command::RedoEdit => MenuGroup::Edit,
+            | Command::Negative => MenuGroup::Image,
             Command::CycleMouseMode
             | Command::NextImage
             | Command::PrevImage
             | Command::ToggleFullscreen => MenuGroup::View,
         }
     }
+
+    /// Whether a separator is drawn before this command inside its menu (it
+    /// opens a new visual section). [`Command::all`] is in presentation order;
+    /// the first command of a group must not set this (tested).
+    pub(crate) fn starts_menu_section(&self) -> bool {
+        matches!(
+            self,
+            Command::OpenBatchConvert
+                | Command::Copy
+                | Command::FlipHorizontal
+                | Command::Grayscale
+                | Command::CycleMouseMode
+        )
+    }
 }
 
 impl Command {
-    /// All commands, in presentation order. The binding table, and any future
-    /// menu or CLI listing, iterate this rather than hardcoding commands.
+    /// All commands, in presentation order: grouped by [`MenuGroup`], sections
+    /// separated by [`Command::starts_menu_section`]. The binding table, and
+    /// any future menu or CLI listing, iterate this rather than hardcoding
+    /// commands.
     pub(crate) fn all() -> &'static [Command] {
         &[
             Command::Open,
             Command::SaveImageAs,
-            Command::Copy,
-            Command::Paste,
             Command::OpenBatchConvert,
             Command::ImageInformation,
-            Command::CycleMouseMode,
-            Command::NextImage,
-            Command::PrevImage,
-            Command::ToggleFullscreen,
+            Command::UndoEdit,
+            Command::RedoEdit,
+            Command::Copy,
+            Command::Paste,
             Command::RotateLeft,
             Command::RotateRight,
             Command::Rotate180,
@@ -100,8 +138,10 @@ impl Command {
             Command::CropToSelection,
             Command::Grayscale,
             Command::Negative,
-            Command::UndoEdit,
-            Command::RedoEdit,
+            Command::NextImage,
+            Command::PrevImage,
+            Command::CycleMouseMode,
+            Command::ToggleFullscreen,
         ]
     }
 
@@ -422,5 +462,43 @@ mod tests {
         assert!(app.info_open);
         app.run_command(Command::ImageInformation, &ctx);
         assert!(!app.info_open);
+    }
+
+    #[test]
+    fn menu_groups_are_contiguous_in_presentation_order() {
+        let groups: Vec<MenuGroup> = Command::all().iter().map(|c| c.menu_group()).collect();
+        for pair in groups.windows(2) {
+            assert!(
+                pair[0] <= pair[1],
+                "{:?} appears again after {:?} in Command::all()",
+                pair[1],
+                pair[0]
+            );
+        }
+    }
+
+    #[test]
+    fn every_menu_group_has_commands() {
+        for group in MenuGroup::ALL {
+            assert!(
+                Command::all().iter().any(|c| c.menu_group() == group),
+                "{group:?} has no commands"
+            );
+        }
+    }
+
+    #[test]
+    fn a_section_separator_never_leads_a_menu() {
+        let mut prev_group = None;
+        for command in Command::all() {
+            let group = command.menu_group();
+            if prev_group != Some(group) {
+                assert!(
+                    !command.starts_menu_section(),
+                    "{command:?} would open the {group:?} menu with a separator"
+                );
+            }
+            prev_group = Some(group);
+        }
     }
 }
