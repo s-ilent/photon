@@ -10,9 +10,10 @@ use eframe::egui;
 /// so copy/paste cannot be matched with `consume_shortcut` alone. We listen
 /// for the command events AND keep the key-shortcut checks as a fallback for
 /// backends that don't rewrite; on any one platform only one path can fire.
-/// App-level handling deliberately takes these events before any widget:
-/// Photon has no TextEdits today, but if one is ever added, it will not see
-/// Ctrl+C/V and needs its own handling.
+/// App-level handling deliberately takes these events before any widget: the
+/// caller skips dispatch while a TextEdit owns the keyboard
+/// (`ctx.wants_keyboard_input()`), which is how the recipe field keeps its
+/// Ctrl+C/V — egui's TextEdit consumes the rewritten Copy/Paste events itself.
 pub(crate) fn take_commands(
     ctx: &egui::Context,
     bindings: &[(Command, Option<egui::KeyboardShortcut>)],

@@ -800,3 +800,39 @@ mod tests {
         assert_eq!(seen.len(), OperationChoice::ALL.len());
     }
 }
+
+#[cfg(test)]
+mod table_probe {
+    //! Temporary probe: do the table headers actually paint?
+    use super::*;
+
+    #[test]
+    fn headers_paint() {
+        let ctx = egui::Context::default();
+        let mut batch = BatchState::default();
+        batch.files = vec![PathBuf::from("/tmp/a.png")];
+        for frame in 0..2 {
+            let out = ctx.run_ui(egui::RawInput::default(), |ctx| {
+                let mut open = true;
+                egui::Window::new("Batch Convert")
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        file_list_section(ui, &mut batch, &[]);
+                    });
+            });
+            let mut texts: Vec<String> = Vec::new();
+            for clipped in &out.shapes {
+                if let egui::Shape::Text(text) = &clipped.shape {
+                    texts.push(text.galley.text().to_owned());
+                }
+            }
+            let joined = texts.join(" | ");
+            println!("frame {frame} text shapes: {joined}");
+            if frame == 1 {
+                assert!(joined.contains("Filename"), "header text painted: {joined}");
+                assert!(joined.contains("Path"), "header text painted: {joined}");
+                assert!(joined.contains("Status"), "header text painted: {joined}");
+            }
+        }
+    }
+}

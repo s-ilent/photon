@@ -40,9 +40,12 @@ impl eframe::App for app::PhotonApp {
         });
 
         // Shortcut / Interaction Handling: scan the command registry's key
-        // bindings, then dispatch each through the single command spine. While
-        // the Settings rebinding UI is capturing a key, it owns the input.
-        if self.binding_capture.is_none() {
+        // bindings, then dispatch each through the single command spine. The
+        // input is left alone while the Settings rebinding UI is capturing a
+        // key, and while a text field owns the keyboard: typing in the recipe
+        // field must not navigate, and its Ctrl+C/V go to the TextEdit (which
+        // consumes the rewritten Copy/Paste events itself).
+        if self.binding_capture.is_none() && !ctx.egui_wants_keyboard_input() {
             for command in input::take_commands(&ctx, &self.bindings) {
                 self.run_command(command, &ctx);
             }
