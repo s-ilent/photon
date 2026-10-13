@@ -5,9 +5,15 @@
 use crate::app;
 use crate::app::settings::Side;
 use crate::commands::{self, Command};
+use crate::ui::{form_cell, form_label, FORM_LABEL_WIDTH, FORM_SPACING};
 use eframe::egui;
 
 const PAGES: [&str; 3] = ["General", "View", "Shortcuts"];
+
+/// The detail pane carries one content column of this width: centred when the
+/// pane is wider, clamped to the pane at narrow sizes. One column for every
+/// page keeps the form (and the Shortcuts table) at the same x across pages.
+const CONTENT_WIDTH: f32 = 460.0;
 
 impl app::PhotonApp {
     /// Render the Preferences surface while it is open: a native OS child
@@ -70,18 +76,26 @@ impl app::PhotonApp {
                 });
             });
             ui.separator();
-            // Detail: the selected page. Fills the window height (the
-            // shrink-to-content default collapses the pane to a sliver while
-            // the grid inside is still measuring itself).
+            // Detail: the selected page on one centred content column, so a
+            // page switch never moves the form. The pane fills the window
+            // height (the shrink-to-content default collapses it to a sliver
+            // while the grid inside is still measuring itself).
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    // The scroll content inherits the row's horizontal
-                    // layout; the pages are vertical forms.
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    let column = CONTENT_WIDTH.min(ui.available_width());
+                    // The field column takes what the label column and the
+                    // spacing leave. A slider fills it: the bar plus the value
+                    // box after it (fixed at interact_size.x) equal the field.
+                    let field = (column - FORM_LABEL_WIDTH - FORM_SPACING).max(0.0);
+                    let value_box = ui.spacing().interact_size.x + ui.spacing().item_spacing.x;
+                    ui.spacing_mut().slider_width =
+                        (field - value_box).max(ui.spacing().interact_size.x);
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                        ui.set_min_width(column);
                         match self.preferences_page {
-                            0 => self.general_page(ui, &ctx),
-                            1 => self.view_page(ui),
+                            0 => self.general_page(ui, &ctx, field),
+                            1 => self.view_page(ui, field),
                             _ => self.shortcuts_page(ui, &ctx),
                         }
                     });
@@ -90,165 +104,197 @@ impl app::PhotonApp {
     }
 
     /// Theme, fonts, and the sidebar's placement.
-    fn general_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn general_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, field: f32) {
         egui::Grid::new("prefs_general")
             .num_columns(2)
-            .spacing([12.0, 6.0])
+            .spacing([FORM_SPACING, 6.0])
             .show(ui, |ui| {
-                grid_label(ui, "Theme:");
-                if ui.button("Cycle Theme").clicked() {
-                    self.settings.dark_mode = !self.settings.dark_mode;
-                    app::PhotonApp::apply_theme(
-                        ctx,
-                        self.settings.dark_mode,
-                        self.settings.font_size,
-                    );
-                }
+                form_label(ui, "Theme:");
+                form_field(ui, field, |ui| {
+                    if ui.button("Cycle Theme").clicked() {
+                        self.settings.dark_mode = !self.settings.dark_mode;
+                        app::PhotonApp::apply_theme(
+                            ctx,
+                            self.settings.dark_mode,
+                            self.settings.font_size,
+                        );
+                    }
+                });
                 ui.end_row();
 
-                grid_label(ui, "Font size:");
-                let font_size =
-                    ui.add(egui::Slider::new(&mut self.settings.font_size, 10.0..=60.0));
-                if font_size.changed() && self.settings.font_size != self.last_font_size {
-                    self.last_font_size = self.settings.font_size;
-                    app::PhotonApp::apply_theme(
-                        ctx,
-                        self.settings.dark_mode,
-                        self.settings.font_size,
-                    );
-                }
+                form_label(ui, "Font size:");
+                form_field(ui, field, |ui| {
+                    let font_size =
+                        ui.add(egui::Slider::new(&mut self.settings.font_size, 10.0..=60.0));
+                    if font_size.changed() && self.settings.font_size != self.last_font_size {
+                        self.last_font_size = self.settings.font_size;
+                        app::PhotonApp::apply_theme(
+                            ctx,
+                            self.settings.dark_mode,
+                            self.settings.font_size,
+                        );
+                    }
+                });
                 ui.end_row();
 
-                grid_label(ui, "Sidebar:");
-                egui::ComboBox::from_id_salt("sidebar_side")
-                    .selected_text(self.settings.sidebar_side.label())
-                    .show_ui(ui, |ui| {
-                        for side in [Side::Left, Side::Right] {
-                            ui.selectable_value(
-                                &mut self.settings.sidebar_side,
-                                side,
-                                side.label(),
-                            );
-                        }
-                    });
+                form_label(ui, "Sidebar:");
+                form_field(ui, field, |ui| {
+                    egui::ComboBox::from_id_salt("sidebar_side")
+                        .selected_text(self.settings.sidebar_side.label())
+                        .show_ui(ui, |ui| {
+                            for side in [Side::Left, Side::Right] {
+                                ui.selectable_value(
+                                    &mut self.settings.sidebar_side,
+                                    side,
+                                    side.label(),
+                                );
+                            }
+                        });
+                });
                 ui.end_row();
 
-                grid_label(ui, "Text alignment:");
-                egui::ComboBox::from_id_salt("sidebar_align")
-                    .selected_text(self.settings.sidebar_align.label())
-                    .show_ui(ui, |ui| {
-                        for side in [Side::Left, Side::Right] {
-                            ui.selectable_value(
-                                &mut self.settings.sidebar_align,
-                                side,
-                                side.label(),
-                            );
-                        }
-                    });
+                form_label(ui, "Text alignment:");
+                form_field(ui, field, |ui| {
+                    egui::ComboBox::from_id_salt("sidebar_align")
+                        .selected_text(self.settings.sidebar_align.label())
+                        .show_ui(ui, |ui| {
+                            for side in [Side::Left, Side::Right] {
+                                ui.selectable_value(
+                                    &mut self.settings.sidebar_align,
+                                    side,
+                                    side.label(),
+                                );
+                            }
+                        });
+                });
                 ui.end_row();
             });
     }
 
     /// How images meet the viewport.
-    fn view_page(&mut self, ui: &mut egui::Ui) {
+    fn view_page(&mut self, ui: &mut egui::Ui, field: f32) {
         egui::Grid::new("prefs_view")
             .num_columns(2)
-            .spacing([12.0, 6.0])
+            .spacing([FORM_SPACING, 6.0])
             .show(ui, |ui| {
-                grid_label(ui, "On open:");
-                ui.checkbox(
-                    &mut self.settings.scale_to_fit,
-                    "Scale to fit when switching images",
-                );
+                form_label(ui, "On open:");
+                form_field(ui, field, |ui| {
+                    ui.checkbox(
+                        &mut self.settings.scale_to_fit,
+                        "Scale to fit when switching images",
+                    );
+                });
                 ui.end_row();
 
-                grid_label(ui, "Fit mode:");
-                egui::ComboBox::from_id_salt("fit_mode")
-                    .selected_text(self.settings.fit_mode.label())
-                    .show_ui(ui, |ui| {
-                        for mode in [
-                            app::view::FitMode::DontFit,
-                            app::view::FitMode::ReduceOnly,
-                            app::view::FitMode::AlwaysFit,
-                        ] {
-                            ui.selectable_value(&mut self.settings.fit_mode, mode, mode.label());
-                        }
-                    });
+                form_label(ui, "Fit mode:");
+                form_field(ui, field, |ui| {
+                    egui::ComboBox::from_id_salt("fit_mode")
+                        .selected_text(self.settings.fit_mode.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                app::view::FitMode::DontFit,
+                                app::view::FitMode::ReduceOnly,
+                                app::view::FitMode::AlwaysFit,
+                            ] {
+                                ui.selectable_value(&mut self.settings.fit_mode, mode, mode.label());
+                            }
+                        });
+                });
                 ui.end_row();
 
-                grid_label(ui, "Resize window to image:");
-                egui::ComboBox::from_id_salt("fit_window")
-                    .selected_text(self.settings.fit_window.label())
-                    .show_ui(ui, |ui| {
-                        for mode in [
-                            app::view::FitWindow::DontFit,
-                            app::view::FitWindow::EnlargeIfSmaller,
-                            app::view::FitWindow::AlwaysResize,
-                        ] {
-                            ui.selectable_value(&mut self.settings.fit_window, mode, mode.label());
-                        }
-                    });
+                form_label(ui, "Resize window to image:");
+                form_field(ui, field, |ui| {
+                    egui::ComboBox::from_id_salt("fit_window")
+                        .selected_text(self.settings.fit_window.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                app::view::FitWindow::DontFit,
+                                app::view::FitWindow::EnlargeIfSmaller,
+                                app::view::FitWindow::AlwaysResize,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.settings.fit_window,
+                                    mode,
+                                    mode.label(),
+                                );
+                            }
+                        });
+                });
                 ui.end_row();
 
-                grid_label(ui, "Reset zoom:");
-                egui::ComboBox::from_id_salt("zoom_reset")
-                    .selected_text(self.settings.zoom_reset.label())
-                    .show_ui(ui, |ui| {
-                        for mode in [
-                            app::ZoomReset::Always,
-                            app::ZoomReset::DimensionChange,
-                            app::ZoomReset::Never,
-                        ] {
-                            ui.selectable_value(&mut self.settings.zoom_reset, mode, mode.label());
-                        }
-                    });
+                form_label(ui, "Reset zoom:");
+                form_field(ui, field, |ui| {
+                    egui::ComboBox::from_id_salt("zoom_reset")
+                        .selected_text(self.settings.zoom_reset.label())
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                app::ZoomReset::Always,
+                                app::ZoomReset::DimensionChange,
+                                app::ZoomReset::Never,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.settings.zoom_reset,
+                                    mode,
+                                    mode.label(),
+                                );
+                            }
+                        });
+                });
                 ui.end_row();
 
-                grid_label(ui, "Zoom:");
+                form_label(ui, "Zoom:");
                 // Lock zoom (Roadmap §3): when enabled, capture the current
                 // magnification and hold it across navigation, overriding the
                 // reset policy above.
-                let mut lock_zoom = self.settings.lock_zoom;
-                if ui
-                    .checkbox(&mut lock_zoom, "Lock across navigation")
-                    .changed()
-                {
-                    self.settings.lock_zoom = lock_zoom;
-                    if lock_zoom {
-                        self.zoom_lock.lock(self.zoom);
-                    } else {
-                        self.zoom_lock.unlock();
+                form_field(ui, field, |ui| {
+                    let mut lock_zoom = self.settings.lock_zoom;
+                    if ui
+                        .checkbox(&mut lock_zoom, "Lock across navigation")
+                        .changed()
+                    {
+                        self.settings.lock_zoom = lock_zoom;
+                        if lock_zoom {
+                            self.zoom_lock.lock(self.zoom);
+                        } else {
+                            self.zoom_lock.unlock();
+                        }
                     }
-                }
+                });
                 ui.end_row();
 
-                grid_label(ui, "Scaling:");
-                ui.checkbox(
-                    &mut self.settings.use_sharp_scaling,
-                    "Sharp (pixel) scaling when magnified",
-                );
+                form_label(ui, "Scaling:");
+                form_field(ui, field, |ui| {
+                    ui.checkbox(
+                        &mut self.settings.use_sharp_scaling,
+                        "Sharp (pixel) scaling when magnified",
+                    );
+                });
                 ui.end_row();
 
-                grid_label(ui, "Background:");
-                ui.checkbox(
-                    &mut self.settings.checkerboard_bg,
-                    "Checkerboard behind transparent images",
-                );
+                form_label(ui, "Background:");
+                form_field(ui, field, |ui| {
+                    ui.checkbox(
+                        &mut self.settings.checkerboard_bg,
+                        "Checkerboard behind transparent images",
+                    );
+                });
                 ui.end_row();
 
-                grid_label(ui, "Repeat:");
-                ui.checkbox(
-                    &mut self.settings.tile_repeat,
-                    "Tile-repeat (seamless) view",
-                );
+                form_label(ui, "Repeat:");
+                form_field(ui, field, |ui| {
+                    ui.checkbox(&mut self.settings.tile_repeat, "Tile-repeat (seamless) view");
+                });
                 ui.end_row();
 
-                grid_label(ui, "HDR exposure (EV):");
+                form_label(ui, "HDR exposure (EV):");
                 // HDR exposure (shader M4): applied to float sources before
                 // the tonemap; ignored for non-HDR images.
-                ui.add(
-                    egui::Slider::new(&mut self.settings.exposure, -6.0..=6.0).fixed_decimals(2),
-                );
+                form_field(ui, field, |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.settings.exposure, -6.0..=6.0)
+                            .fixed_decimals(2),
+                    );
+                });
                 ui.end_row();
             });
     }
@@ -363,11 +409,16 @@ impl app::PhotonApp {
     }
 }
 
-/// A right-aligned form label with its colon (UI-DESIGN §4).
-fn grid_label(ui: &mut egui::Ui, text: &str) {
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.label(text);
-    });
+/// One form row's field cell: the fixed field column, control left-aligned in
+/// it. A long control label wraps at the column edge instead of widening the
+/// grid past the pane at narrow sizes.
+fn form_field(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    form_cell(
+        ui,
+        width,
+        egui::Layout::left_to_right(egui::Align::Center),
+        add,
+    );
 }
 
 /// Render-check entry (see `ui::render_checks`), wrapped the same way the

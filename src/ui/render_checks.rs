@@ -81,10 +81,29 @@ fn render_preferences() {
             crate::ui::settings_window::render_check_preferences_body(&mut app, ui);
         });
     }
-    // A cramped size, to catch clipping.
+    // Cramped size, to catch clipping: General and the widest form (View).
+    for (name, page) in [("preferences_small.png", 0usize), ("preferences_small_view.png", 1)] {
+        let mut app = PhotonApp::new();
+        app.settings_open = true;
+        app.preferences_page = page;
+        render(name, [470.0, 340.0], |ui| {
+            crate::ui::settings_window::render_check_preferences_body(&mut app, ui);
+        });
+    }
+}
+
+/// The bottom info bar with a real-looking image row; the mouse mode sits at
+/// the far right, clear of the readouts.
+#[test]
+fn render_info_bar() {
     let mut app = PhotonApp::new();
-    app.settings_open = true;
-    render("preferences_small.png", [470.0, 340.0], |ui| {
-        crate::ui::settings_window::render_check_preferences_body(&mut app, ui);
+    app.images = vec![std::path::PathBuf::from(
+        "vacation/very_long_photo_name_dsc_0001.jpg",
+    )];
+    app.image_dimensions = Some((3840, 2160));
+    app.current_color_space = Some(crate::image_loader::ColorSpace::Srgb);
+    app.mode = crate::app::MouseMode::Select;
+    render("info_bar.png", [900.0, 40.0], |ui| {
+        egui::Panel::bottom("info").show_inside(ui, |ui| app.ui_info_bar(ui));
     });
 }

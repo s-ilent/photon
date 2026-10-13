@@ -119,10 +119,16 @@ impl app::PhotonApp {
     /// registry: the groups come from [`MenuGroup::ALL`], the items and their
     /// enable state from [`Command::all`], so a new command joins a menu just
     /// by declaring its [`MenuGroup`] (Roadmap §1).
+    ///
+    /// Hover switching: egui 0.34 opens a top-level menu as a memory-tracked
+    /// popup and switches only on a click. Each title's popup id is collected
+    /// here so a hover on another title can move the open menu, as a menu bar
+    /// is expected to behave (see [`switch_open_menu_on_hover`]).
     pub(crate) fn ui_menu_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let mut titles: Vec<(egui::Id, egui::Rect)> = Vec::new();
         egui::MenuBar::new().ui(ui, |ui| {
             for group in MenuGroup::ALL {
-                ui.menu_button(group.title(), |ui| {
+                let response = ui.menu_button(group.title(), |ui| {
                     for &command in Command::all() {
                         if command.menu_group() != group {
                             continue;
@@ -177,9 +183,15 @@ impl app::PhotonApp {
                             self.zoom_to_desktop(ctx);
                         }
                     }
-                });
+                })
+                .response;
+                titles.push((
+                    egui::Popup::default_response_id(&response),
+                    response.rect.expand2(ui.spacing().item_spacing / 2.0),
+                ));
             }
         });
+        switch_open_menu_on_hover(ctx, &titles);
     }
 
     pub(crate) fn ui_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -220,5 +232,83 @@ impl app::PhotonApp {
             });
         });
 
+    }
+}
+
+/// Menu-bar hover switching: while one of the bar's menus is open, a pointer
+/// over a different title closes it and opens that title's menu. Egui's own
+/// switching lives in `SubMenu` and never runs for the bar's top-level popups.
+fn switch_open_menu_on_hover(ctx: &egui::Context, titles: &[(egui::Id, egui::Rect)]) {
+    let Some(open) = titles
+        .iter()
+        .find(|(id, _)| egui::Popup::is_id_open(ctx, *id))
+    else {
+        return;
+    };
+    let Some(pointer) = ctx.pointer_hover_pos() else {
+        return;
+    };
+    if let Some((hovered, _)) = titles
+        .iter()
+        .find(|(id, rect)| *id != open.0 && rect.contains(pointer))
+    {
+        // One popup is open at a time, so opening the hovered menu closes the open one.
+        egui::Popup::open_id(ctx, *hovered);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable as _;
+
+    /// Photon's real menu bar in the same top panel the app uses.
+    fn menu_bar_harness() -> egui_kittest::Harness<'static> {
+        let mut app = app::PhotonApp::new();
+        egui_kittest::Harness::new_ui(move |ui| {
+            let ctx = ui.ctx().clone();
+            egui::Panel::top("menubar").show_inside(ui, |ui| app.ui_menu_bar(ui, &ctx));
+        })
+    }
+
+    /// Menubar behaviour: hovering a neighbouring title while a menu is open
+    /// moves the open menu to the hovered title.
+    #[test]
+    fn hovering_a_neighbouring_title_switches_the_open_menu() {
+        let mut harness = menu_bar_harness();
+        harness.run();
+
+        harness.get_by_label("View").click();
+        harness.run();
+        assert!(
+            harness.query_by_label("Zoom to Desktop").is_some(),
+            "the View menu opens on click"
+        );
+
+        // Two frames: the first sees the hover, the second shows the menu.
+        harness.get_by_label("File").hover();
+        harness.run();
+        harness.run();
+        assert!(
+            harness.query_by_label("Zoom to Desktop").is_none(),
+            "the View menu closes when File is hovered"
+        );
+        assert!(
+            harness.query_by_label("Image Information…").is_some(),
+            "File's menu opens on hover"
+        );
+    }
+
+    /// Hover alone must not open a menu when none is open.
+    #[test]
+    fn hovering_a_title_with_no_menu_open_opens_nothing() {
+        let mut harness = menu_bar_harness();
+        harness.run();
+
+        harness.get_by_label("File").hover();
+        harness.run();
+        harness.run();
+        assert!(harness.query_by_label("Open…").is_none());
+        assert!(harness.query_by_label("Zoom to Desktop").is_none());
     }
 }

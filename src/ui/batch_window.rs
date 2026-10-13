@@ -10,6 +10,7 @@ use crate::app::batch::{
 use crate::app::image_op::{self, FilterKind, ImageOp, ResampleFilter};
 use crate::app::theme;
 use crate::app::{BatchMessage, BatchState, PhotonApp};
+use crate::ui::{form_label, FORM_SPACING};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor::regular as icons;
@@ -494,9 +495,9 @@ fn file_list_section(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBu
 fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     egui::Grid::new("batch_output")
         .num_columns(2)
-        .spacing([12.0, 6.0])
+        .spacing([FORM_SPACING, 6.0])
         .show(ui, |ui| {
-            grid_label(ui, "Format:");
+            form_label(ui, "Format:");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("batch_format")
                     .selected_text(batch.format.extension().to_uppercase())
@@ -526,7 +527,7 @@ fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
             });
             ui.end_row();
 
-            grid_label(ui, "If target exists:");
+            form_label(ui, "If target exists:");
             egui::ComboBox::from_id_salt("batch_overwrite")
                 .selected_text(match batch.overwrite {
                     OverwritePolicy::Overwrite => "Overwrite",
@@ -545,7 +546,7 @@ fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                 });
             ui.end_row();
 
-            grid_label(ui, "Output folder:");
+            form_label(ui, "Output folder:");
             ui.horizontal(|ui| {
                 if ui.button("Pick folder\u{2026}").clicked() {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -563,13 +564,6 @@ fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
             });
             ui.end_row();
         });
-}
-
-/// A right-aligned form label with its colon (UI-DESIGN §4).
-fn grid_label(ui: &mut egui::Ui, text: &str) {
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.label(text);
-    });
 }
 
 fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
@@ -633,9 +627,9 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     let resizing = choice == OperationChoice::Resize;
     egui::Grid::new("batch_add_step")
         .num_columns(2)
-        .spacing([12.0, 6.0])
+        .spacing([FORM_SPACING, 6.0])
         .show(ui, |ui| {
-            grid_label(ui, "Add step:");
+            form_label(ui, "Add step:");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("batch_op")
                     .selected_text(choice.label())
@@ -669,7 +663,7 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
             });
             ui.end_row();
 
-            grid_label(ui, "Parameters:");
+            form_label(ui, "Parameters:");
             ui.horizontal(|ui| {
                 ui.add_enabled(
                     resizing,

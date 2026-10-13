@@ -93,6 +93,12 @@ impl app::PhotonApp {
                     });
                 });
             }
+
+            // Far right: the live mouse mode, plain like the other readouts
+            // (UI-DESIGN §6). The toolbar keeps the cycle control.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(format!("Mouse: {}", self.mode.name()));
+            });
         });
     }
 }
