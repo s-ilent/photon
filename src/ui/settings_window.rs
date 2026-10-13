@@ -10,40 +10,71 @@ use eframe::egui;
 const PAGES: [&str; 3] = ["General", "View", "Shortcuts"];
 
 impl app::PhotonApp {
-    pub(crate) fn ui_settings_window(&mut self, ctx: &egui::Context) {
-        // Local copy of the open flag: the body borrows `self` mutably, which
-        // would otherwise conflict with `Window::open`.
-        let mut open = self.settings_open;
-        egui::Window::new("Preferences")
-            .default_width(560.0)
-            .default_height(430.0)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                self.preferences_page = self.preferences_page.min(PAGES.len() - 1);
-                ui.horizontal(|ui| {
-                    // Master: the category column.
-                    ui.allocate_ui(egui::vec2(120.0, ui.available_height()), |ui| {
-                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                            for (index, label) in PAGES.iter().enumerate() {
-                                if ui
-                                    .selectable_label(self.preferences_page == index, *label)
-                                    .clicked()
-                                {
-                                    self.preferences_page = index;
-                                }
-                            }
-                        });
+    /// Render the Preferences surface while it is open: a native OS child
+    /// window (viewport), like the Batch Convert surface — its title bar,
+    /// resizing and close button belong to the window manager. Called from
+    /// `main` each frame, after the panels, so the live-applied settings are
+    /// observed as complete edits.
+    pub(crate) fn show_settings_viewport(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title("Preferences")
+            .with_inner_size([560.0, 430.0])
+            .with_min_inner_size([480.0, 320.0])
+            .with_active(true);
+        if ctx.embed_viewports() {
+            builder.min_inner_size = None;
+        }
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("preferences"),
+            builder,
+            |ui, class| {
+                if class == egui::ViewportClass::Immediate {
+                    if ui.input(|i| i.viewport().close_requested()) {
+                        self.settings_open = false;
+                        self.binding_capture = None;
+                        return;
+                    }
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        self.preferences_body(ui);
                     });
-                    ui.separator();
-                    // Detail: the selected page.
-                    egui::ScrollArea::vertical().show(ui, |ui| match self.preferences_page {
-                        0 => self.general_page(ui, ctx),
-                        1 => self.view_page(ui),
-                        _ => self.shortcuts_page(ui, ctx),
-                    });
+                } else {
+                    // Embedded fallback: the surface is a child Ui of the host.
+                    self.preferences_body(ui);
+                }
+            },
+        );
+    }
+
+    /// The master-detail body: category column on the left, the selected
+    /// page in the detail pane.
+    fn preferences_body(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        self.preferences_page = self.preferences_page.min(PAGES.len() - 1);
+        ui.horizontal(|ui| {
+            // Master: the category column.
+            ui.allocate_ui(egui::vec2(120.0, ui.available_height()), |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    for (index, label) in PAGES.iter().enumerate() {
+                        if ui
+                            .selectable_label(self.preferences_page == index, *label)
+                            .clicked()
+                        {
+                            self.preferences_page = index;
+                        }
+                    }
                 });
             });
-        self.settings_open = open;
+            ui.separator();
+            // Detail: the selected page.
+            egui::ScrollArea::vertical().show(ui, |ui| match self.preferences_page {
+                0 => self.general_page(ui, &ctx),
+                1 => self.view_page(ui),
+                _ => self.shortcuts_page(ui, &ctx),
+            });
+        });
     }
 
     /// Theme, fonts, and the sidebar's placement.

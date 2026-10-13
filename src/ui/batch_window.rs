@@ -239,21 +239,6 @@ fn start_batch(batch: &mut BatchState) {
 }
 
 impl PhotonApp {
-    /// Show the Batch Convert window when it is open. Called from the toolbar
-    /// each frame (mirroring how `ui_settings_window` is driven from `main`).
-    pub(crate) fn ui_batch_window(&mut self, ctx: &egui::Context) {
-        // Take a local copy of the open flag: the body borrows `self.batch`
-        // mutably, which would otherwise conflict with `Window::open`.
-        let mut open = self.batch.open;
-        egui::Window::new("Batch Convert")
-            .default_width(560.0)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                batch_window_body(ui, &mut self.batch, &self.images)
-            });
-        self.batch.open = open;
-    }
-
     /// Poll the background batch run and swap in its statuses. Called every
     /// frame (like `check_save_status`), so a run finishes even if the window
     /// has been closed; `request_repaint` keeps the spinner and progress bar
@@ -284,9 +269,47 @@ impl PhotonApp {
     }
 }
 
+/// Render the Batch Convert surface while it is open: a native OS child
+/// window (viewport), not an in-app pane — its title bar, resizing and close
+/// button belong to the window manager. Called from `main` each frame, after
+/// the panels, so the body's state edits land as complete passes.
+pub(crate) fn show(ctx: &egui::Context, batch: &mut BatchState, images: &[PathBuf]) {
+    if !batch.open {
+        return;
+    }
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title("Batch Convert")
+        .with_inner_size([560.0, 480.0])
+        .with_min_inner_size([380.0, 260.0])
+        .with_active(true);
+    if ctx.embed_viewports() {
+        // No native child windows on this platform: drop the OS-window
+        // contract so the embedded fallback follows its host canvas.
+        builder.min_inner_size = None;
+    }
+    ctx.show_viewport_immediate(
+        egui::ViewportId::from_hash_of("batch_convert"),
+        builder,
+        |ui, class| {
+            if class == egui::ViewportClass::Immediate {
+                if ui.input(|i| i.viewport().close_requested()) {
+                    batch.open = false;
+                    return;
+                }
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    batch_window_body(ui, batch, images);
+                });
+            } else {
+                // Embedded fallback: the surface is a child Ui of the host.
+                batch_window_body(ui, batch, images);
+            }
+        },
+    );
+}
+
 /// The window body. A free function over the batch state and the app's current
-/// file list, so the closure passed to `egui::Window::show` captures disjoint
-/// fields of `PhotonApp` rather than the whole app.
+/// file list, so the viewport closure captures disjoint fields of `PhotonApp`
+/// rather than the whole app.
 fn batch_window_body(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBuf]) {
     file_list_section(ui, batch, images);
     ui.separator();

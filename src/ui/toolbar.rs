@@ -220,10 +220,5 @@ impl app::PhotonApp {
             });
         });
 
-        // The Batch Convert window is an `egui::Window`; drive it from here so
-        // the toolbar is its single entry point.
-        if self.batch.open {
-            self.ui_batch_window(ctx);
-        }
     }
 }

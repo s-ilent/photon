@@ -58,14 +58,6 @@ impl eframe::App for app::PhotonApp {
             self.open_path(path);
         }
 
-        // 0. Settings Window
-        if self.settings_open {
-            self.ui_settings_window(&ctx);
-        } else {
-            // A key capture must not survive the Settings window closing.
-            self.binding_capture = None;
-        }
-
         // 0. Image Information Window
         if self.info_open {
             self.ui_info_window(&ctx);
@@ -113,6 +105,11 @@ impl eframe::App for app::PhotonApp {
                 self.draw_image_workspace(ui);
             }
         });
+
+        // 4. Tool windows are native OS child windows (viewports), rendered
+        // after the panels so their state edits land as complete passes.
+        ui::batch_window::show(&ctx, &mut self.batch, &self.images);
+        self.show_settings_viewport(&ctx);
     }
 }
 

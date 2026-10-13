@@ -82,7 +82,10 @@ Placement rule for a new command — ask what it touches:
   rewrites them.
 - Spacing comes from `Style`/`Spacing`, not per-call pixel values; independent
   blocks get one `add_space`, related rows get none.
-- Dialogs are `egui::Window`s. Confirmations: non-collapsible, non-resizable,
+- Tool windows (Preferences, Batch Convert) are **native OS child windows** via
+  `show_viewport_immediate` viewports — the WM owns their title bar, resizing
+  and close button; never an `egui::Window` pane. Confirmations (none yet) stay
+  `egui::Window`: non-collapsible, non-resizable,
   anchored centre.
 - Alert anatomy: a bold one-line headline question; a smaller consequence
   body; verb buttons (`Discard`/`Cancel`, not `OK`); the destructive action
