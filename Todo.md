@@ -269,6 +269,22 @@ the escalation path if a picked crate needs a fix upstream lacks.
       that poisons presented frames), so adoption realistically means the
       vendored copies. `egui-arbor` upstream pins egui 0.31 — adopt via
       Sophia's verified 0.34.3 vendor copy, never from crates.io.
+      Layout-crate review (2026-10-14): **`egui_flex 0.6`** is the one worth
+      wanting — MIT, single dep (`egui ^0.34`), part of lucasmerlin's
+      maintained hello_egui monorepo, ~33k downloads. NOT adopted now: no
+      surface fights native layout (toolbar is declarative-native, forms are
+      Grid per UI-DESIGN §4). It **supersedes `egui_taffy` as the flex escape
+      hatch** if that changes — egui-native, no taffy engine, none of the
+      vendored-fork baggage; pin 0.6 (0.7+ needs egui 0.35+).
+      **`egui_alignments 0.3.8`** (compatible, MIT, 1 dep) — convenience
+      wrappers over egui's own alignment APIs; native copes; crib API shapes
+      into `ui/kit.rs` if a need repeats. **`panes 0.21` + `panes-egui
+      0.5.1`** (compatible, MIT) — a two-crate foreign layout engine at ~90
+      recent downloads and adapter/core version coupling; any dockable-pane
+      future is `egui_dock`'s job. **`egui_layout_job_macro 0.1.1`** — hard
+      reject: LGPL-3.0-only (conflicts with the MIT/Apache posture under
+      static linking), pins `egui==0.34.3` exactly, and Photon has no
+      LayoutJob/rich-text usage for it to serve.
 - [x] **`egui-winit` vendored fork** (2026-10-14) — `vendor/egui-winit` behind
       `[patch.crates-io]`, one hunk: Ctrl+V with no text on the clipboard falls
       through as a key event so image paste reaches the app. The
