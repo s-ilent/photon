@@ -1,4 +1,5 @@
 use crate::app;
+use crate::commands::{self, Command};
 use eframe::egui;
 
 impl app::PhotonApp {
@@ -126,6 +127,112 @@ impl app::PhotonApp {
                         self.settings.font_size,
                     );
                 }
+
+                ui.separator();
+                ui.heading("Shortcuts");
+                ui.label(
+                    "Copy and Paste always answer Ctrl+C/V; rebinding adds or removes an extra key.",
+                );
+
+                // While a capture is armed, it owns the input: main.rs pauses
+                // command dispatch until the capture resolves. egui-winit
+                // rewrites Ctrl+C/X/V into clipboard command events, so those
+                // keys are only observable as Copy/Cut/Paste here.
+                if let Some(capture) = self.binding_capture {
+                    let mut captured = None;
+                    let mut cancelled = false;
+                    ctx.input(|i| {
+                        for event in &i.events {
+                            match *event {
+                                egui::Event::Key {
+                                    key: egui::Key::Escape,
+                                    pressed: true,
+                                    ..
+                                } => {
+                                    cancelled = true;
+                                    break;
+                                }
+                                egui::Event::Key {
+                                    key,
+                                    modifiers,
+                                    pressed: true,
+                                    repeat: false,
+                                    ..
+                                } => {
+                                    captured = Some(egui::KeyboardShortcut {
+                                        modifiers,
+                                        logical_key: key,
+                                    });
+                                    break;
+                                }
+                                egui::Event::Copy => {
+                                    captured = Some(egui::KeyboardShortcut::new(
+                                        egui::Modifiers::COMMAND,
+                                        egui::Key::C,
+                                    ));
+                                    break;
+                                }
+                                egui::Event::Cut => {
+                                    captured = Some(egui::KeyboardShortcut::new(
+                                        egui::Modifiers::COMMAND,
+                                        egui::Key::X,
+                                    ));
+                                    break;
+                                }
+                                egui::Event::Paste(_) => {
+                                    captured = Some(egui::KeyboardShortcut::new(
+                                        egui::Modifiers::COMMAND,
+                                        egui::Key::V,
+                                    ));
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+                    if cancelled {
+                        self.binding_capture = None;
+                    } else if let Some(shortcut) = captured {
+                        commands::apply_binding_change(&mut self.bindings, capture, Some(shortcut));
+                        self.settings.shortcut_overrides =
+                            commands::binding_overrides(&self.bindings);
+                        self.binding_capture = None;
+                    }
+                }
+
+                egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                    egui::Grid::new("shortcuts").num_columns(4).show(ui, |ui| {
+                        for &command in Command::all() {
+                            ui.label(command.label());
+                            if self.binding_capture == Some(command) {
+                                ui.label("press a key… (Esc cancels)");
+                            } else {
+                                let binding = self
+                                    .bindings
+                                    .iter()
+                                    .find_map(|(c, s)| if *c == command { *s } else { None });
+                                ui.label(
+                                    binding
+                                        .map(commands::shortcut_to_text)
+                                        .unwrap_or_else(|| "unbound".into()),
+                                );
+                                if ui.small_button("Change").clicked() {
+                                    self.binding_capture = Some(command);
+                                }
+                                if ui.small_button("Clear").clicked() {
+                                    commands::apply_binding_change(&mut self.bindings, command, None);
+                                    self.settings.shortcut_overrides =
+                                        commands::binding_overrides(&self.bindings);
+                                }
+                            }
+                            ui.end_row();
+                        }
+                    });
+                    if ui.button("Reset All").clicked() {
+                        self.bindings = commands::effective_bindings(&[]);
+                        self.settings.shortcut_overrides = Vec::new();
+                    }
+                });
             });
     }
 }

@@ -125,6 +125,20 @@ mod tests {
     }
 
     #[test]
+    fn shortcut_overrides_parse_from_raw_config() {
+        let parsed = parse_config(
+            "(\n    shortcut_overrides: [(\"next\", Some(\"Ctrl+N\")), (\"fullscreen\", None)],\n)",
+        );
+        assert_eq!(
+            parsed.shortcut_overrides,
+            vec![
+                ("next".to_owned(), Some("Ctrl+N".to_owned())),
+                ("fullscreen".to_owned(), None),
+            ]
+        );
+    }
+
+    #[test]
     fn partial_config_fills_defaults() {
         let parsed = parse_config("(\n    dark_mode: false,\n)");
         assert!(!parsed.dark_mode);
