@@ -250,7 +250,13 @@ the escalation path if a picked crate needs a fix upstream lacks.
       rule: plain text), `egui_taffy 0.12` (flexbox — only if native layout
       stops coping). Vetted-but-inapplicable: `egui_dock`, `egui-arbor`
       (revisit for the texture sidebar), `egui_plot`, `egui_code_editor`,
-      `egui_field_editor`, `ab_glyph`, `mimalloc`.
+      `egui_field_editor`, `ab_glyph`, `mimalloc`, `re_ui 0.33`
+      (evaluated 2026-10-14: the one egui-0.34-compatible release, but it is
+      Rerun's internal theme/widget crate — drags 7 `re_*` SDK crates incl.
+      the entity-db/datastore layer plus ~25 others, ships Rerun's theme
+      against our Dracula identity, and is frozen 4 release trains behind an
+      internal API that moves at Rerun's train cadence. Its widget *shapes*
+      are the catalog to crib into `ui/kit.rs`; the crate itself stays out).
 - [x] **`egui-winit` vendored fork** (2026-10-14) — `vendor/egui-winit` behind
       `[patch.crates-io]`, one hunk: Ctrl+V with no text on the clipboard falls
       through as a key event so image paste reaches the app. The
