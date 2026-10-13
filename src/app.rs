@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use wgpu::Device;
 
+use crate::commands::Command;
 use crate::render;
 
 pub(crate) use settings::{AppSettings, SortMode, ZoomReset};
@@ -308,6 +309,20 @@ pub struct PhotonApp {
     /// Set when a new image is displayed; the canvas consumes it to resize the
     /// OS window to the image per `settings.fit_window` (Roadmap.md §3).
     pub(crate) pending_window_fit: bool,
+    /// Effective shortcut table: defaults with `settings.shortcut_overrides`
+    /// applied; rebuilt when the rebinding UI changes a binding (Roadmap §10).
+    pub(crate) bindings: Vec<(Command, Option<egui::KeyboardShortcut>)>,
+    /// While `Some`, the next captured key rebinds this command instead of
+    /// dispatching (Settings → Shortcuts).
+    pub(crate) binding_capture: Option<Command>,
+    /// Operation chain from the command line, applied once the first image is
+    /// displayed (Roadmap §10).
+    #[allow(dead_code)] // consumed by the CLI launch path
+    pub(crate) cli_ops: Option<Vec<image_op::ImageOp>>,
+    /// `--save` target from the command line, written once `cli_ops` have
+    /// applied.
+    #[allow(dead_code)] // consumed by the CLI launch path
+    pub(crate) cli_save_to: Option<PathBuf>,
 }
 
 impl PhotonApp {
@@ -365,6 +380,10 @@ impl PhotonApp {
             edit_undo: edit::UndoStack::new(),
             zoom_lock: view::ZoomLock::new(),
             pending_window_fit: false,
+            bindings: crate::commands::effective_bindings(&[]),
+            binding_capture: None,
+            cli_ops: None,
+            cli_save_to: None,
         }
     }
 

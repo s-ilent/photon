@@ -74,6 +74,9 @@ pub struct AppSettings {
     /// (Roadmap §5b / shader M4). Ignored for non-HDR images.
     pub exposure: f32,
     pub sort_mode: SortMode,
+    /// Per-command shortcut overrides as `(cli_name, shortcut text)` deltas
+    /// from the defaults; `None` text = explicitly unbound (Roadmap §10).
+    pub shortcut_overrides: Vec<(String, Option<String>)>,
 }
 
 impl Default for AppSettings {
@@ -91,6 +94,7 @@ impl Default for AppSettings {
             lock_zoom: false,
             exposure: 0.0,
             sort_mode: SortMode::default(),
+            shortcut_overrides: Vec::new(),
         }
     }
 }

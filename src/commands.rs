@@ -202,11 +202,9 @@ impl Command {
         }
     }
 
-    /// The switch that names this command in the scripting language
-    /// (Roadmap §10). Stable, lowercase, hyphenated — the seed of the CLI
-    /// grammar, so these must not churn. Reserved for the CLI/rebinding work;
-    /// the tests here cover its invariants until that lands.
-    #[allow(dead_code)]
+    /// The name that identifies this command in config shortcut overrides and
+    /// the scripting surface (Roadmap §10). Stable, lowercase, hyphenated —
+    /// must not churn.
     pub(crate) fn cli_name(&self) -> &'static str {
         match self {
             Command::Open => "open",
@@ -235,6 +233,11 @@ impl Command {
             Command::UndoEdit => "undo",
             Command::RedoEdit => "redo",
         }
+    }
+
+    /// The command a [`Self::cli_name`] names, if any.
+    pub(crate) fn from_cli_name(name: &str) -> Option<Self> {
+        Self::all().iter().copied().find(|c| c.cli_name() == name)
     }
 }
 
@@ -332,6 +335,73 @@ pub(crate) fn default_bindings() -> &'static [(Command, Option<egui::KeyboardSho
     &BINDINGS
 }
 
+/// The effective binding table: [`default_bindings`] with the config's
+/// per-command overrides applied. An override replaces every default key of
+/// its command; unparseable shortcut text is ignored so a corrupt config keeps
+/// the defaults (Roadmap §10).
+pub(crate) fn effective_bindings(
+    overrides: &[(String, Option<String>)],
+) -> Vec<(Command, Option<egui::KeyboardShortcut>)> {
+    let mut bindings = default_bindings().to_vec();
+    for (name, text) in overrides {
+        let Some(command) = Command::from_cli_name(name) else {
+            continue;
+        };
+        let shortcut = match text {
+            // Explicitly unbound.
+            None => None,
+            Some(text) => match shortcut_from_text(text) {
+                Some(shortcut) => Some(shortcut),
+                None => continue,
+            },
+        };
+        let mut applied = false;
+        for row in bindings.iter_mut().filter(|(c, _)| *c == command) {
+            *row = (command, if applied { None } else { shortcut });
+            applied = true;
+        }
+    }
+    bindings
+}
+
+/// The config-file text form of a shortcut, e.g. `"Ctrl+Shift+Z"` —
+/// [`shortcut_from_text`] parses this back. Always the non-Mac spelling, so a
+/// config is portable across platforms (`Ctrl` means Cmd there).
+#[allow(dead_code)] // consumed by the rebinding UI
+pub(crate) fn shortcut_to_text(shortcut: egui::KeyboardShortcut) -> String {
+    shortcut.format(&egui::ModifierNames::NAMES, false)
+}
+
+/// Parse the text form [`shortcut_to_text`] writes, plus egui's Mac modifier
+/// names ("Cmd", "Option") for hand-edited configs. `None` when any part is
+/// neither a modifier nor a key name.
+pub(crate) fn shortcut_from_text(text: &str) -> Option<egui::KeyboardShortcut> {
+    use egui::ModifierNames;
+    let names = ModifierNames::NAMES;
+    let mut modifiers = egui::Modifiers::NONE;
+    let mut key = None;
+    for part in text.split(names.concat) {
+        let part = part.trim();
+        // "Ctrl" is the printed form of the platform Command modifier, so it
+        // parses back to `command` (which is Ctrl on non-Mac, Cmd on Mac).
+        if part == names.ctrl {
+            modifiers.command = true;
+        } else if part == names.alt || part == names.mac_alt {
+            modifiers.alt = true;
+        } else if part == names.shift {
+            modifiers.shift = true;
+        } else if part == names.mac_cmd {
+            modifiers.mac_cmd = true;
+        } else {
+            key = egui::Key::from_name(part);
+        }
+    }
+    Some(egui::KeyboardShortcut {
+        modifiers,
+        logical_key: key?,
+    })
+}
+
 impl PhotonApp {
     /// Dispatch one command. This is the single entry point shared by the
     /// keyboard path today and, later, menus, the CLI, batch recipes and
@@ -373,18 +443,18 @@ impl PhotonApp {
                 self.pan = egui::Vec2::ZERO;
             }
             Command::SaveSelectionAs => self.save_selection_as(),
-            Command::RotateLeft => self.apply_edit(ImageOp::RotateLeft),
-            Command::RotateRight => self.apply_edit(ImageOp::RotateRight),
-            Command::Rotate180 => self.apply_edit(ImageOp::Rotate180),
-            Command::FlipHorizontal => self.apply_edit(ImageOp::FlipHorizontal),
-            Command::FlipVertical => self.apply_edit(ImageOp::FlipVertical),
+            Command::RotateLeft => self.apply_edit(&[ImageOp::RotateLeft]),
+            Command::RotateRight => self.apply_edit(&[ImageOp::RotateRight]),
+            Command::Rotate180 => self.apply_edit(&[ImageOp::Rotate180]),
+            Command::FlipHorizontal => self.apply_edit(&[ImageOp::FlipHorizontal]),
+            Command::FlipVertical => self.apply_edit(&[ImageOp::FlipVertical]),
             Command::CropToSelection => {
                 if let Some(op) = self.crop_op_from_selection() {
-                    self.apply_edit(op);
+                    self.apply_edit(&[op]);
                 }
             }
-            Command::Grayscale => self.apply_edit(ImageOp::Grayscale),
-            Command::Negative => self.apply_edit(ImageOp::Negative),
+            Command::Grayscale => self.apply_edit(&[ImageOp::Grayscale]),
+            Command::Negative => self.apply_edit(&[ImageOp::Negative]),
             Command::UndoEdit => self.undo_edit(),
             Command::RedoEdit => self.redo_edit(),
         }
@@ -588,5 +658,62 @@ mod tests {
             }
             prev_group = Some(group);
         }
+    }
+
+    #[test]
+    fn shortcut_text_round_trips() {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        for shortcut in [
+            KeyboardShortcut::new(Modifiers::NONE, Key::Space),
+            KeyboardShortcut::new(Modifiers::COMMAND, Key::Z),
+            KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z),
+            KeyboardShortcut::new(Modifiers::NONE, Key::F11),
+            KeyboardShortcut::new(Modifiers::NONE, Key::Minus),
+            KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::ArrowRight),
+        ] {
+            let text = shortcut_to_text(shortcut);
+            assert_eq!(
+                shortcut_from_text(&text),
+                Some(shortcut),
+                "round-trip of {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shortcut_text_parses_human_forms() {
+        let shortcut = shortcut_from_text("Ctrl+Shift+Z").expect("parse Ctrl+Shift+Z");
+        assert_eq!(shortcut.logical_key, egui::Key::Z);
+        assert!(shortcut.modifiers.command);
+        assert!(shortcut.modifiers.shift);
+        assert!(shortcut_from_text("gibberish").is_none());
+        assert!(shortcut_from_text("Ctrl+NotAKey").is_none());
+    }
+
+    #[test]
+    fn effective_bindings_apply_overrides() {
+        // An override replaces both keys of a two-key command with one.
+        let bindings = effective_bindings(&[("next".into(), Some("Ctrl+N".into()))]);
+        let next: Vec<_> = bindings
+            .iter()
+            .filter(|(c, _)| *c == Command::NextImage)
+            .collect();
+        assert_eq!(next.len(), 2);
+        assert_eq!(next.iter().filter(|(_, s)| s.is_some()).count(), 1);
+
+        // An explicit unbind clears every key of the command.
+        let bindings = effective_bindings(&[("fullscreen".into(), None)]);
+        assert!(
+            bindings
+                .iter()
+                .all(|(c, s)| c != &Command::ToggleFullscreen || s.is_none())
+        );
+
+        // Unknown names and unparseable text leave the defaults in place.
+        let bindings = effective_bindings(&[
+            ("nope".into(), Some("Ctrl+N".into())),
+            ("info".into(), Some("nonsense".into())),
+        ]);
+        assert_eq!(bindings, default_bindings());
     }
 }

@@ -41,9 +41,12 @@ impl eframe::App for app::PhotonApp {
         });
 
         // Shortcut / Interaction Handling: scan the command registry's key
-        // bindings, then dispatch each through the single command spine.
-        for command in input::take_commands(&ctx) {
-            self.run_command(command, &ctx);
+        // bindings, then dispatch each through the single command spine. While
+        // the Settings rebinding UI is capturing a key, it owns the input.
+        if self.binding_capture.is_none() {
+            for command in input::take_commands(&ctx, &self.bindings) {
+                self.run_command(command, &ctx);
+            }
         }
 
         // Drag-and-drop: open a dropped folder, or a dropped file together
@@ -174,6 +177,7 @@ fn main() -> eframe::Result<()> {
             }
 
             app.load_config();
+            app.bindings = commands::effective_bindings(&app.settings.shortcut_overrides);
             app.init_worker();
 
             if let Some(ref p) = path {

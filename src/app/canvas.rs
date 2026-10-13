@@ -343,10 +343,14 @@ impl PhotonApp {
         self.edit_undo = edit::UndoStack::new();
     }
 
-    /// Apply one edit to the displayed image and re-upload it. The op is the
-    /// shared [`ImageOp`] vocabulary, so the editor and the batch chain run the
-    /// same implementation.
-    pub(crate) fn apply_edit(&mut self, op: ImageOp) {
+    /// Apply edits to the displayed image and re-upload the result. The ops
+    /// are the shared [`ImageOp`] vocabulary, so the editor, the command line
+    /// and the batch chain run the same implementation; a chain lands as one
+    /// undo step back to the pre-edit image.
+    pub(crate) fn apply_edit(&mut self, ops: &[ImageOp]) {
+        if ops.is_empty() {
+            return;
+        }
         let Some((pixels, width, height)) = crate::app::clipboard::current_rgba(self) else {
             return;
         };
@@ -356,7 +360,7 @@ impl PhotonApp {
             .edit_undo
             .is_empty()
             .then(|| edit::Rgba::new(pixels.clone(), width, height));
-        let (out, out_w, out_h) = image_op::apply(pixels, width, height, &[op]);
+        let (out, out_w, out_h) = image_op::apply(pixels, width, height, ops);
         let out = edit::Rgba::new(out, out_w, out_h);
 
         if let Some(seed) = seed {

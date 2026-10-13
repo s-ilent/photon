@@ -1,9 +1,8 @@
-use crate::commands::{self, Command};
+use crate::commands::Command;
 use eframe::egui;
 
-/// Scan this frame's input for commands, driven by the registry's default
-/// binding table ([`commands::default_bindings`]) — the single place a key is
-/// associated with an action.
+/// Scan this frame's input for commands, driven by the binding table passed in
+/// (defaults with config overrides — see [`commands::effective_bindings`]).
 ///
 /// GOTCHA: egui-winit rewrites Ctrl+C / Ctrl+V / Ctrl+X at the input layer
 /// into `Event::Copy` / `Event::Paste` / `Event::Cut` (its TextEdit clipboard
@@ -14,7 +13,10 @@ use eframe::egui;
 /// App-level handling deliberately takes these events before any widget:
 /// Photon has no TextEdits today, but if one is ever added, it will not see
 /// Ctrl+C/V and needs its own handling.
-pub(crate) fn take_commands(ctx: &egui::Context) -> Vec<Command> {
+pub(crate) fn take_commands(
+    ctx: &egui::Context,
+    bindings: &[(Command, Option<egui::KeyboardShortcut>)],
+) -> Vec<Command> {
     let mut commands = Vec::new();
 
     ctx.input_mut(|i| {
@@ -38,7 +40,7 @@ pub(crate) fn take_commands(ctx: &egui::Context) -> Vec<Command> {
         // Key path, straight off the binding table. The Copy/Paste rows are
         // their raw-key fallback for backends that don't rewrite Ctrl+C/V;
         // `push_once` keeps that from double-firing with the events above.
-        for &(command, shortcut) in commands::default_bindings() {
+        for &(command, shortcut) in bindings {
             if let Some(shortcut) = shortcut {
                 if i.consume_shortcut(&shortcut) {
                     push_once(&mut commands, command);
@@ -61,6 +63,7 @@ fn push_once(commands: &mut Vec<Command>, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands;
 
     fn with_events(events: Vec<egui::Event>) -> Vec<Command> {
         let ctx = egui::Context::default();
@@ -69,7 +72,7 @@ mod tests {
             ..Default::default()
         };
         ctx.begin_pass(raw);
-        let commands = take_commands(&ctx);
+        let commands = take_commands(&ctx, commands::default_bindings());
         let _ = ctx.end_pass();
         commands
     }
