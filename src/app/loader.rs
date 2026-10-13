@@ -530,6 +530,32 @@ impl PhotonApp {
         });
     }
 
+    /// Open an explicit list of files as a temporary playlist, in argument
+    /// order — no walker, no sort (Roadmap §10). A playlist is an explicit
+    /// list, so directory watching does not apply.
+    pub(crate) fn load_playlist(&mut self, files: Vec<PathBuf>) {
+        self.error_overlay = None;
+
+        // Drop all cached and displayed images; wgpu frees the GPU resources
+        // when the last reference (including in-flight frames) is gone. Any
+        // in-flight walk/watch of a previous directory goes with them.
+        self.texture_cache.clear();
+        self.displayed_image = None;
+        self.dir_load_receiver = None;
+        self.dir_watch_receiver = None;
+        self.dir_watch_stop = None;
+
+        if files.is_empty() {
+            return;
+        }
+        self.images = files;
+        self.current_index = 0;
+        self.target_path = Some(self.images[0].clone());
+        self.is_loading_dir = false;
+        self.is_pasted = false;
+        self.request_current();
+    }
+
     pub(crate) fn check_dir_load_complete(&mut self) {
         if let Some(ref receiver) = self.dir_load_receiver {
             if let Ok(files) = receiver.try_recv() {
@@ -845,5 +871,50 @@ mod tests {
         assert_eq!(app.images[app.current_index], PathBuf::from("c.png"));
         assert_eq!(app.target_path, Some(PathBuf::from("c.png")));
         assert!(app.is_loading);
+    }
+
+    #[test]
+    fn playlist_keeps_argument_order_without_sorting() {
+        let mut app = PhotonApp::new();
+        // A previous directory's state must not leak into the playlist.
+        app.error_overlay = Some(StatusOverlay::Error("stale".to_string()));
+        app.current_index = 2;
+
+        app.load_playlist(vec![
+            PathBuf::from("z.png"),
+            PathBuf::from("m.png"),
+            PathBuf::from("a.png"),
+        ]);
+
+        // Argument order is kept as-is; the first file is the target.
+        assert_eq!(
+            app.images,
+            vec![
+                PathBuf::from("z.png"),
+                PathBuf::from("m.png"),
+                PathBuf::from("a.png")
+            ]
+        );
+        assert_eq!(app.current_index, 0);
+        assert_eq!(app.target_path, Some(PathBuf::from("z.png")));
+        assert!(!app.is_loading_dir);
+        assert!(app.error_overlay.is_none());
+        assert!(app.is_loading, "the first image is being fetched");
+
+        // Once the first image is in the cache, the cached-load path shows it.
+        app.texture_cache.put(
+            PathBuf::from("z.png"),
+            std::sync::Arc::new(crate::render::RenderImage {
+                width: 10,
+                height: 10,
+                is_cubemap: false,
+                color_space: crate::image_loader::ColorSpace::Srgb,
+                hdr: false,
+                layers: vec![crate::render::Layer { tiles: Vec::new() }],
+            }),
+        );
+        app.request_current();
+        assert!(app.displayed_image.is_some());
+        assert!(!app.is_loading);
     }
 }

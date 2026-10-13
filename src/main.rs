@@ -8,7 +8,6 @@ mod ui;
 use crate::app::PhotonApp;
 use eframe::egui;
 use eframe::egui_wgpu::WgpuConfiguration;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 impl eframe::App for app::PhotonApp {
@@ -72,6 +71,7 @@ impl eframe::App for app::PhotonApp {
         self.check_dir_watch();
         self.check_save_status(&ctx);
         self.check_image_info();
+        self.check_cli_launch(&ctx);
 
         // Persist settings when they changed this frame
         self.save_config_if_changed();
@@ -118,7 +118,20 @@ fn main() -> eframe::Result<()> {
     #[cfg(not(debug_assertions))]
     log::info!("Running in RELEASE mode.");
 
-    let path = std::env::args().nth(1).map(PathBuf::from);
+    // Command line (Roadmap §10): parse before the GUI opens so a bad
+    // invocation exits with a message instead of an empty window.
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let launch = match app::cli::parse_args(&args) {
+        Ok(app::cli::Parsed::Help) => {
+            println!("{}", app::cli::usage());
+            return Ok(());
+        }
+        Ok(app::cli::Parsed::Launch(l)) => l,
+        Err(e) => {
+            eprintln!("photon: {e} (try --help)");
+            std::process::exit(2);
+        }
+    };
 
     eframe::run_native(
         "Photon",
@@ -180,10 +193,27 @@ fn main() -> eframe::Result<()> {
             app.bindings = commands::effective_bindings(&app.settings.shortcut_overrides);
             app.init_worker();
 
-            if let Some(ref p) = path {
+            // Apply the command-line launch: one path opens with its folder,
+            // several file paths form a playlist in argument order (Roadmap
+            // §10). The op chain and --save target are consumed per frame
+            // once the first image is displayed (cli::check_cli_launch).
+            let app::cli::CliLaunch {
+                paths,
+                ops,
+                save_to,
+                open_settings,
+            } = launch;
+            if paths.len() > 1 {
+                app.load_playlist(paths);
+            } else if let Some(p) = paths.into_iter().next() {
                 app.target_path = Some(p.clone());
-                app.load_directory(p);
+                app.load_directory(&p);
             }
+            if open_settings {
+                app.settings_open = true;
+            }
+            app.cli_ops = (!ops.is_empty()).then_some(ops);
+            app.cli_save_to = save_to;
             Ok(Box::new(app))
         }),
     )

@@ -16,6 +16,7 @@ pub(crate) use settings::{AppSettings, SortMode, ZoomReset};
 
 // Submodule Declarations
 mod canvas;
+pub(crate) mod cli;
 mod clipboard;
 mod config;
 mod loader;
@@ -316,12 +317,10 @@ pub struct PhotonApp {
     /// dispatching (Settings → Shortcuts).
     pub(crate) binding_capture: Option<Command>,
     /// Operation chain from the command line, applied once the first image is
-    /// displayed (Roadmap §10).
-    #[allow(dead_code)] // consumed by the CLI launch path
+    /// displayed (Roadmap §10); consumed by `cli::check_cli_launch`.
     pub(crate) cli_ops: Option<Vec<image_op::ImageOp>>,
     /// `--save` target from the command line, written once `cli_ops` have
     /// applied.
-    #[allow(dead_code)] // consumed by the CLI launch path
     pub(crate) cli_save_to: Option<PathBuf>,
 }
 

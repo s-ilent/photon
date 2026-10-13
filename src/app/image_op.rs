@@ -77,7 +77,7 @@ impl FilterKind {
         }
     }
 
-    /// The `/filter:<name>` token (Appendix B), lowercase.
+    /// The `--filter <name>` value (Appendix B), lowercase.
     fn cli_name(self) -> &'static str {
         match self {
             FilterKind::Blur => "blur",
@@ -126,7 +126,7 @@ impl ResampleFilter {
         }
     }
 
-    /// The optional third `/resize` component. Appendix B has no filter slot;
+    /// The optional third `--resize` component. Appendix B has no filter slot;
     /// this is a documented superset so the text form round-trips losslessly.
     fn cli_name(self) -> &'static str {
         match self {
@@ -175,7 +175,7 @@ pub(crate) enum ImageOp {
     },
     /// Convolution filter (Appendix A), applied via [`convolve`].
     Filter(FilterKind),
-    /// Trim `left`/`top`/`right`/`bottom` pixel margins (`/crop:(L,T,R,B)`),
+    /// Trim `left`/`top`/`right`/`bottom` pixel margins (`--crop L,T,R,B`),
     /// clamped to the image; an empty result is a no-op.
     Crop {
         left: u32,
@@ -186,23 +186,23 @@ pub(crate) enum ImageOp {
 }
 
 impl ImageOp {
-    /// The Appendix-B switch for this operation. Chain them with
-    /// [`recipe_text`].
+    /// The `--` switch (with its value, space-separated) for this operation.
+    /// Chain them with [`recipe_text`].
     pub(crate) fn to_cli(&self) -> String {
         match self {
-            ImageOp::RotateLeft => "/rotate:left".to_string(),
-            ImageOp::RotateRight => "/rotate:right".to_string(),
-            ImageOp::Rotate180 => "/rotate:180".to_string(),
-            ImageOp::FlipHorizontal => "/mirror".to_string(),
-            ImageOp::FlipVertical => "/flip".to_string(),
-            ImageOp::Grayscale => "/grayscale".to_string(),
-            ImageOp::Negative => "/negative".to_string(),
+            ImageOp::RotateLeft => "--rotate left".to_string(),
+            ImageOp::RotateRight => "--rotate right".to_string(),
+            ImageOp::Rotate180 => "--rotate 180".to_string(),
+            ImageOp::FlipHorizontal => "--mirror".to_string(),
+            ImageOp::FlipVertical => "--flip".to_string(),
+            ImageOp::Grayscale => "--grayscale".to_string(),
+            ImageOp::Negative => "--negative".to_string(),
             ImageOp::Resize {
                 width,
                 height,
                 filter,
             } => format!(
-                "/resize:({},{},{})",
+                "--resize {}x{}:{}",
                 width
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "0".to_string()),
@@ -211,31 +211,34 @@ impl ImageOp {
                     .unwrap_or_else(|| "0".to_string()),
                 filter.cli_name()
             ),
-            ImageOp::Filter(kind) => format!("/filter:{}", kind.cli_name()),
+            ImageOp::Filter(kind) => format!("--filter {}", kind.cli_name()),
             ImageOp::Crop {
                 left,
                 top,
                 right,
                 bottom,
-            } => format!("/crop:({left},{top},{right},{bottom})"),
+            } => format!("--crop {left},{top},{right},{bottom}"),
         }
     }
 
-    /// Parse one Appendix-B switch (case-insensitive). Free rotation
-    /// (`/rotate:<degrees>`) and percent resize (`%`) are not supported and
+    /// Parse one `--` switch with its value (case-insensitive). The value
+    /// follows the switch separated by whitespace (`--rotate right`) or `=`
+    /// (`--rotate=right`); both arrive as one string here, since [`recipe_text`]
+    /// groups each switch with its value before calling. Free rotation
+    /// (`--rotate <degrees>`) and percent resize (`%`) are not supported and
     /// return an error rather than being ignored.
     pub(crate) fn from_cli(token: &str) -> Result<ImageOp, String> {
         let rest = token
-            .strip_prefix('/')
-            .ok_or_else(|| format!("{token:?} is not a switch (expected a leading '/')"))?;
-        let (name, arg) = match rest.split_once(':') {
-            Some((name, arg)) => (name, Some(arg)),
+            .strip_prefix("--")
+            .ok_or_else(|| format!("{token:?} is not a switch (expected a leading '--')"))?;
+        let (name, arg) = match rest.split_once([' ', '=', '\t']) {
+            Some((name, arg)) => (name, Some(arg.trim())),
             None => (rest, None),
         };
-        let unexpected = |what: &str| format!("/{name} takes no argument (got {what:?})");
+        let unexpected = |what: &str| format!("--{name} takes no argument (got {what:?})");
         match name.to_ascii_lowercase().as_str() {
             "rotate" => {
-                let arg = arg.ok_or_else(|| "/rotate needs left, right or 180".to_string())?;
+                let arg = arg.ok_or_else(|| "--rotate needs left, right or 180".to_string())?;
                 match arg.to_ascii_lowercase().as_str() {
                     "left" => Ok(ImageOp::RotateLeft),
                     "right" => Ok(ImageOp::RotateRight),
@@ -253,45 +256,41 @@ impl ImageOp {
             "grayscale" => arg.map_or(Ok(ImageOp::Grayscale), |a| Err(unexpected(a))),
             "negative" => arg.map_or(Ok(ImageOp::Negative), |a| Err(unexpected(a))),
             "resize" => {
-                let arg = arg.ok_or_else(|| "/resize needs (W,H)".to_string())?;
+                let arg = arg.ok_or_else(|| "--resize needs WxH".to_string())?;
                 parse_resize(arg)
             }
             "filter" => {
-                let arg = arg.ok_or_else(|| "/filter needs a filter name".to_string())?;
+                let arg = arg.ok_or_else(|| "--filter needs a filter name".to_string())?;
                 FilterKind::from_cli_name(&arg.to_ascii_lowercase())
                     .map(ImageOp::Filter)
                     .ok_or_else(|| format!("unknown filter {arg:?}"))
             }
             "crop" => {
-                let arg = arg.ok_or_else(|| "/crop needs (L,T,R,B)".to_string())?;
+                let arg = arg.ok_or_else(|| "--crop needs L,T,R,B".to_string())?;
                 parse_crop(arg)
             }
-            other => Err(format!("unknown switch /{other}")),
+            other => Err(format!("unknown switch --{other}")),
         }
     }
 }
 
-/// Parse the `(W,H[,filter])` argument of `/resize`. `0` means "keep aspect".
+/// Parse the `WxH[:filter]` argument of `--resize`. `0` means "keep aspect".
 fn parse_resize(arg: &str) -> Result<ImageOp, String> {
-    let inner = arg
-        .strip_prefix('(')
-        .and_then(|a| a.strip_suffix(')'))
-        .ok_or_else(|| format!("/resize wants parentheses: /resize:(W,H), got {arg:?}"))?;
-    if inner.contains('%') {
+    if arg.contains('%') {
         return Err("percent resize is not supported; give explicit pixels".to_string());
     }
-    let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
-    let (w, h, filter) = match parts.as_slice() {
-        [w, h] => (*w, *h, ResampleFilter::Lanczos3.cli_name()),
-        // Superset of Appendix B's two-argument form: the resample filter
-        // travels with the op, so the text form must be able to carry it.
-        [w, h, filter] => (*w, *h, *filter),
-        _ => return Err(format!("/resize wants (W,H[,filter]), got {arg:?}")),
+    let (dims, filter) = match arg.split_once(':') {
+        Some((dims, filter)) => (dims, filter),
+        None => (arg, ResampleFilter::Lanczos3.cli_name()),
     };
-    let width = parse_axis(w, "width")?;
-    let height = parse_axis(h, "height")?;
+    let dims = dims.to_ascii_lowercase();
+    let (w, h) = dims
+        .split_once('x')
+        .ok_or_else(|| format!("--resize wants WxH[:filter], got {arg:?}"))?;
+    let width = parse_axis(w.trim(), "width")?;
+    let height = parse_axis(h.trim(), "height")?;
     if width.is_none() && height.is_none() {
-        return Err("/resize with both axes unset does nothing".to_string());
+        return Err("--resize with both axes unset does nothing".to_string());
     }
     let filter = ResampleFilter::from_cli_name(&filter.to_ascii_lowercase())
         .ok_or_else(|| format!("unknown resample filter {filter:?}"))?;
@@ -312,15 +311,11 @@ fn parse_axis(text: &str, what: &str) -> Result<Option<u32>, String> {
     }
 }
 
-/// Parse the `(L,T,R,B)` margin argument of `/crop`.
+/// Parse the `L,T,R,B` margin argument of `--crop`.
 fn parse_crop(arg: &str) -> Result<ImageOp, String> {
-    let inner = arg
-        .strip_prefix('(')
-        .and_then(|a| a.strip_suffix(')'))
-        .ok_or_else(|| format!("/crop wants parentheses: /crop:(L,T,R,B), got {arg:?}"))?;
-    let parts: Vec<&str> = inner.split(',').map(str::trim).collect();
+    let parts: Vec<&str> = arg.split(',').map(str::trim).collect();
     let [l, t, r, b] = parts.as_slice() else {
-        return Err(format!("/crop wants (L,T,R,B), got {arg:?}"));
+        return Err(format!("--crop wants L,T,R,B, got {arg:?}"));
     };
     let margin = |text: &str, what: &str| {
         text.parse::<u32>()
@@ -335,7 +330,8 @@ fn parse_crop(arg: &str) -> Result<ImageOp, String> {
 }
 
 /// Serialise an operation chain to the shared text form: whitespace-separated
-/// Appendix-B switches, the format batch recipes and the CLI both use.
+/// `--` switches (each value in the same word group), the format batch recipes
+/// and the CLI both use.
 pub(crate) fn recipe_text(ops: &[ImageOp]) -> String {
     ops.iter()
         .map(ImageOp::to_cli)
@@ -343,9 +339,33 @@ pub(crate) fn recipe_text(ops: &[ImageOp]) -> String {
         .join(" ")
 }
 
-/// Parse a chain produced by [`recipe_text`]. Empty text is an empty chain.
+/// Parse a chain produced by [`recipe_text`]. Each switch takes at most one
+/// value: the next word, unless it also starts with `--`. Empty text is an
+/// empty chain.
 pub(crate) fn parse_recipe(text: &str) -> Result<Vec<ImageOp>, String> {
-    text.split_whitespace().map(ImageOp::from_cli).collect()
+    let mut words = text.split_whitespace().peekable();
+    let mut ops = Vec::new();
+    while let Some(word) = words.next() {
+        if !word.starts_with("--") {
+            // A value word (or plain text) with no switch before it.
+            return Err(format!(
+                "{word:?} is not a switch (expected a leading '--')"
+            ));
+        }
+        let value = match words.peek() {
+            Some(next) if !next.starts_with("--") => {
+                let value = *next;
+                words.next();
+                Some(value)
+            }
+            _ => None,
+        };
+        match value {
+            Some(value) => ops.push(ImageOp::from_cli(&format!("{word} {value}"))?),
+            None => ops.push(ImageOp::from_cli(word)?),
+        }
+    }
+    Ok(ops)
 }
 
 /// Apply `ops` in order to an RGBA8 buffer, returning the resulting pixels and
@@ -792,31 +812,52 @@ mod tests {
             },
         ];
         let text = recipe_text(&ops);
-        assert_eq!(text, "/rotate:right /grayscale /resize:(800,600,lanczos3)");
+        assert_eq!(text, "--rotate right --grayscale --resize 800x600:lanczos3");
         assert_eq!(parse_recipe(&text), Ok(ops));
     }
 
     #[test]
-    fn from_cli_accepts_the_appendix_b_forms_case_insensitively() {
-        assert_eq!(ImageOp::from_cli("/rotate:Left"), Ok(ImageOp::RotateLeft));
-        assert_eq!(ImageOp::from_cli("/rotate:RIGHT"), Ok(ImageOp::RotateRight));
-        assert_eq!(ImageOp::from_cli("/mirror"), Ok(ImageOp::FlipHorizontal));
-        assert_eq!(ImageOp::from_cli("/flip"), Ok(ImageOp::FlipVertical));
+    fn from_cli_accepts_the_cli_forms_case_insensitively() {
+        assert_eq!(ImageOp::from_cli("--rotate Left"), Ok(ImageOp::RotateLeft));
         assert_eq!(
-            ImageOp::from_cli("/resize:(800,600)"),
+            ImageOp::from_cli("--rotate RIGHT"),
+            Ok(ImageOp::RotateRight)
+        );
+        assert_eq!(ImageOp::from_cli("--MIRROR"), Ok(ImageOp::FlipHorizontal));
+        assert_eq!(ImageOp::from_cli("--flip"), Ok(ImageOp::FlipVertical));
+        assert_eq!(
+            ImageOp::from_cli("--resize 800x600"),
             Ok(ImageOp::Resize {
                 width: Some(800),
                 height: Some(600),
                 filter: ResampleFilter::Lanczos3,
             }),
-            "the two-argument Appendix-B form defaults the filter"
+            "the two-argument form defaults the filter"
         );
         assert_eq!(
-            ImageOp::from_cli("/filter:Gaussian3"),
+            ImageOp::from_cli("--RESIZE 800X600:GAUSSIAN"),
+            Ok(ImageOp::Resize {
+                width: Some(800),
+                height: Some(600),
+                filter: ResampleFilter::Gaussian,
+            }),
+            "the axis separator and filter parse case-insensitively too"
+        );
+        assert_eq!(
+            ImageOp::from_cli("--resize 1280x0"),
+            Ok(ImageOp::Resize {
+                width: Some(1280),
+                height: None,
+                filter: ResampleFilter::Lanczos3,
+            }),
+            "0 keeps the aspect ratio"
+        );
+        assert_eq!(
+            ImageOp::from_cli("--filter Gaussian3"),
             Ok(ImageOp::Filter(FilterKind::Gaussian3))
         );
         assert_eq!(
-            ImageOp::from_cli("/crop:(1,2,3,4)"),
+            ImageOp::from_cli("--crop 1,2,3,4"),
             Ok(ImageOp::Crop {
                 left: 1,
                 top: 2,
@@ -826,20 +867,78 @@ mod tests {
         );
     }
 
+    /// A switch and its value may also be joined with `=` (the CLI's
+    /// second spelling); recipes accept the same form.
+    #[test]
+    fn from_cli_accepts_the_equals_form() {
+        assert_eq!(
+            ImageOp::from_cli("--rotate=right"),
+            Ok(ImageOp::RotateRight)
+        );
+        assert_eq!(
+            ImageOp::from_cli("--resize=800x600:lanczos3"),
+            Ok(ImageOp::Resize {
+                width: Some(800),
+                height: Some(600),
+                filter: ResampleFilter::Lanczos3,
+            })
+        );
+        assert_eq!(
+            ImageOp::from_cli("--crop=1,2,3,4"),
+            Ok(ImageOp::Crop {
+                left: 1,
+                top: 2,
+                right: 3,
+                bottom: 4
+            })
+        );
+    }
+
+    /// `parse_recipe` groups each switch with its value word, in order.
+    #[test]
+    fn parse_recipe_groups_switches_with_their_values() {
+        assert_eq!(
+            parse_recipe("--grayscale --rotate right --crop 1,2,3,4 --mirror"),
+            Ok(vec![
+                ImageOp::Grayscale,
+                ImageOp::RotateRight,
+                ImageOp::Crop {
+                    left: 1,
+                    top: 2,
+                    right: 3,
+                    bottom: 4
+                },
+                ImageOp::FlipHorizontal,
+            ])
+        );
+    }
+
     #[test]
     fn from_cli_rejects_unsupported_and_malformed_switches() {
-        assert!(ImageOp::from_cli("/rotate:45")
+        assert!(ImageOp::from_cli("--rotate 45")
             .err()
             .is_some_and(|e| e.contains("free rotate")));
-        assert!(ImageOp::from_cli("/resize:(800,600%)")
+        assert!(ImageOp::from_cli("--resize 800x50%")
             .err()
             .is_some_and(|e| e.contains("percent")));
-        assert!(ImageOp::from_cli("/resize:(0,0)").is_err(), "no-op resize");
-        assert!(ImageOp::from_cli("/nope").is_err());
-        assert!(ImageOp::from_cli("grayscale").is_err(), "missing '/'");
-        assert!(ImageOp::from_cli("/filter:tint").is_err());
-        assert!(ImageOp::from_cli("/crop:(1,2,3)").is_err());
-        assert!(parse_recipe("/rotate:right /bogus").is_err());
+        assert!(ImageOp::from_cli("--resize 0x0").is_err(), "no-op resize");
+        assert!(
+            ImageOp::from_cli("--resize 800").is_err(),
+            "no axis separator"
+        );
+        assert!(ImageOp::from_cli("--nope").is_err());
+        assert!(ImageOp::from_cli("grayscale").is_err(), "missing '--'");
+        assert!(ImageOp::from_cli("--filter tint").is_err());
+        assert!(ImageOp::from_cli("--crop 1,2,3").is_err());
+        assert!(
+            ImageOp::from_cli("--grayscale right").is_err(),
+            "no-arg switch with a value"
+        );
+        assert!(parse_recipe("--rotate right --bogus").is_err());
+        assert!(
+            parse_recipe("right --rotate").is_err(),
+            "value before any switch"
+        );
         assert_eq!(
             parse_recipe(""),
             Ok(vec![]),

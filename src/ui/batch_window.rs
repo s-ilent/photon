@@ -646,7 +646,7 @@ mod tests {
             Err("the clipboard has no recipe text".to_string())
         );
         assert_eq!(
-            import_recipe("/rotate:right /negative"),
+            import_recipe("--rotate right --negative"),
             Ok(vec![ImageOp::RotateRight, ImageOp::Negative])
         );
     }
