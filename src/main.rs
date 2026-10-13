@@ -59,6 +59,9 @@ impl eframe::App for app::PhotonApp {
         // 0. Settings Window
         if self.settings_open {
             self.ui_settings_window(&ctx);
+        } else {
+            // A key capture must not survive the Settings window closing.
+            self.binding_capture = None;
         }
 
         // 0. Image Information Window

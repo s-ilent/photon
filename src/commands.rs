@@ -127,8 +127,12 @@ impl Command {
 
     /// The tooltip shortcut hint, e.g. " (Ctrl+O)"; empty when unbound. The
     /// first binding wins for multi-key commands.
-    pub(crate) fn shortcut_hint(&self, ctx: &egui::Context) -> String {
-        default_bindings()
+    pub(crate) fn shortcut_hint(
+        &self,
+        ctx: &egui::Context,
+        bindings: &[(Command, Option<egui::KeyboardShortcut>)],
+    ) -> String {
+        bindings
             .iter()
             .find_map(|(c, s)| if c == self { *s } else { None })
             .map(|s| format!(" ({})", ctx.format_shortcut(&s)))
@@ -364,10 +368,60 @@ pub(crate) fn effective_bindings(
     bindings
 }
 
+/// Apply a binding change: `shortcut == None` clears the command's keys;
+/// otherwise the command is rebound to the shortcut and any OTHER command
+/// holding that exact key is auto-unbound of it (last wins — the menus show
+/// the resulting bindings). A two-key command keeps its non-conflicting key.
+pub(crate) fn apply_binding_change(
+    bindings: &mut [(Command, Option<egui::KeyboardShortcut>)],
+    command: Command,
+    shortcut: Option<egui::KeyboardShortcut>,
+) {
+    for row in bindings.iter_mut().filter(|(c, _)| *c == command) {
+        row.1 = None;
+    }
+    if let Some(shortcut) = shortcut {
+        if let Some(row) = bindings.iter_mut().find(|(c, _)| *c == command) {
+            row.1 = Some(shortcut);
+        }
+        for row in bindings.iter_mut().filter(|(c, _)| *c != command) {
+            if row.1 == Some(shortcut) {
+                row.1 = None;
+            }
+        }
+    }
+}
+
+/// The config deltas: rows of `bindings` that differ from [`default_bindings`]
+/// as `(cli_name, shortcut text | None)`. One entry per changed command —
+/// `None` text when the effective table leaves it without keys; commands
+/// matching the defaults are skipped. Order follows `Command::all` so the
+/// config output is stable.
+pub(crate) fn binding_overrides(
+    bindings: &[(Command, Option<egui::KeyboardShortcut>)],
+) -> Vec<(String, Option<String>)> {
+    Command::all()
+        .iter()
+        .filter_map(|command| {
+            let keys = |table: &[(Command, Option<egui::KeyboardShortcut>)]| {
+                table
+                    .iter()
+                    .filter(|(c, _)| c == command)
+                    .filter_map(|(_, s)| *s)
+                    .collect::<Vec<_>>()
+            };
+            if keys(default_bindings()) == keys(bindings) {
+                return None;
+            }
+            let text = keys(bindings).first().map(|s| shortcut_to_text(*s));
+            Some((command.cli_name().to_owned(), text))
+        })
+        .collect()
+}
+
 /// The config-file text form of a shortcut, e.g. `"Ctrl+Shift+Z"` —
 /// [`shortcut_from_text`] parses this back. Always the non-Mac spelling, so a
 /// config is portable across platforms (`Ctrl` means Cmd there).
-#[allow(dead_code)] // consumed by the rebinding UI
 pub(crate) fn shortcut_to_text(shortcut: egui::KeyboardShortcut) -> String {
     shortcut.format(&egui::ModifierNames::NAMES, false)
 }
@@ -604,10 +658,114 @@ mod tests {
     #[test]
     fn shortcut_hints_follow_the_binding_table() {
         let ctx = egui::Context::default();
-        assert!(Command::Open.shortcut_hint(&ctx).contains('O'));
-        assert!(!Command::SaveImageAs.shortcut_hint(&ctx).is_empty());
-        assert!(Command::OpenBatchConvert.shortcut_hint(&ctx).is_empty());
-        assert!(Command::ToggleSidebar.shortcut_hint(&ctx).is_empty());
+        assert!(Command::Open.shortcut_hint(&ctx, default_bindings()).contains('O'));
+        assert!(!Command::SaveImageAs.shortcut_hint(&ctx, default_bindings()).is_empty());
+        assert!(Command::OpenBatchConvert.shortcut_hint(&ctx, default_bindings()).is_empty());
+        assert!(Command::ToggleSidebar.shortcut_hint(&ctx, default_bindings()).is_empty());
+    }
+
+    #[test]
+    fn shortcut_hint_follows_an_overridden_table() {
+        let ctx = egui::Context::default();
+        let bindings = effective_bindings(&[
+            ("open".into(), Some("Ctrl+Shift+O".into())),
+            ("fullscreen".into(), None),
+        ]);
+        assert!(Command::Open.shortcut_hint(&ctx, &bindings).contains("Shift"));
+        assert!(Command::ToggleFullscreen.shortcut_hint(&ctx, &bindings).is_empty());
+    }
+
+    #[test]
+    fn rebinding_a_two_key_command_replaces_both_keys() {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let mut bindings = default_bindings().to_vec();
+        let rebinding = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
+        apply_binding_change(&mut bindings, Command::NextImage, Some(rebinding));
+        let next: Vec<_> = bindings
+            .iter()
+            .filter(|(c, _)| *c == Command::NextImage)
+            .map(|(_, s)| *s)
+            .collect();
+        assert_eq!(next, vec![Some(rebinding), None]);
+    }
+
+    #[test]
+    fn rebinding_takes_the_key_from_the_previous_holder() {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let mut bindings = default_bindings().to_vec();
+        // Space is NextImage's default key.
+        let space = KeyboardShortcut::new(Modifiers::NONE, Key::Space);
+        apply_binding_change(&mut bindings, Command::PrevImage, Some(space));
+        let next: Vec<_> = bindings
+            .iter()
+            .filter(|(c, _)| *c == Command::NextImage)
+            .map(|(_, s)| *s)
+            .collect();
+        assert_eq!(
+            next.iter().filter(|s| s.is_some()).count(),
+            1,
+            "NextImage keeps its non-conflicting key"
+        );
+        // PrevImage's own row carries the rebound key.
+        assert!(bindings
+            .iter()
+            .any(|&(c, s)| c == Command::PrevImage && s == Some(space)));
+    }
+
+    #[test]
+    fn unbinding_clears_every_key() {
+        let mut bindings = default_bindings().to_vec();
+        apply_binding_change(&mut bindings, Command::CycleMouseMode, None);
+        assert!(bindings
+            .iter()
+            .all(|&(c, s)| c != Command::CycleMouseMode || s.is_none()));
+    }
+
+    #[test]
+    fn rebinding_a_command_without_keys() {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let mut bindings = default_bindings().to_vec();
+        let binding = KeyboardShortcut::new(Modifiers::COMMAND, Key::B);
+        apply_binding_change(&mut bindings, Command::OpenBatchConvert, Some(binding));
+        assert!(bindings.contains(&(Command::OpenBatchConvert, Some(binding))));
+    }
+
+    #[test]
+    fn binding_overrides_round_trip_through_effective_bindings() {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let mut table = default_bindings().to_vec();
+        // A rebind, an unbind, and a two-key command that lost one key.
+        apply_binding_change(
+            &mut table,
+            Command::Open,
+            Some(KeyboardShortcut::new(
+                Modifiers::COMMAND.plus(Modifiers::SHIFT),
+                Key::O,
+            )),
+        );
+        apply_binding_change(&mut table, Command::ToggleFullscreen, None);
+        apply_binding_change(
+            &mut table,
+            Command::NextImage,
+            Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::N)),
+        );
+
+        let overrides = binding_overrides(&table);
+        // Command::all() order, not application order.
+        assert_eq!(
+            overrides,
+            vec![
+                ("open".into(), Some("Ctrl+Shift+O".into())),
+                ("next".into(), Some("Ctrl+N".into())),
+                ("fullscreen".into(), None),
+            ]
+        );
+        assert_eq!(effective_bindings(&overrides), table);
+    }
+
+    #[test]
+    fn binding_overrides_skip_default_commands() {
+        assert!(binding_overrides(default_bindings()).is_empty());
     }
 
     /// Ctrl+I toggles the window: invoking it again closes what it opened.

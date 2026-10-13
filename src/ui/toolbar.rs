@@ -117,7 +117,11 @@ impl app::PhotonApp {
         } else {
             format!("{} {}", button.icon, button.label)
         };
-        let tooltip = format!("{}{}", button.tooltip, button.command.shortcut_hint(ctx));
+        let tooltip = format!(
+            "{}{}",
+            button.tooltip,
+            button.command.shortcut_hint(ctx, &self.bindings)
+        );
         if ui
             .add_enabled(
                 self.command_enabled(button.command),
@@ -214,7 +218,7 @@ impl app::PhotonApp {
                 .button(format!("{} {}", icons::MOUSE_SIMPLE, self.mode.name()))
                 .on_hover_text(format!(
                     "Mouse mode{}",
-                    Command::CycleMouseMode.shortcut_hint(ctx)
+                    Command::CycleMouseMode.shortcut_hint(ctx, &self.bindings)
                 ))
                 .clicked()
             {
