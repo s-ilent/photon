@@ -8,6 +8,7 @@ use crate::app::batch::{
     self, ConversionJob, FileStatus, OutputFormat, OverwritePolicy, SaveOptions,
 };
 use crate::app::image_op::{self, FilterKind, ImageOp, ResampleFilter};
+use crate::app::theme;
 use crate::app::{BatchMessage, BatchState, PhotonApp};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
@@ -239,7 +240,7 @@ impl PhotonApp {
         // mutably, which would otherwise conflict with `Window::open`.
         let mut open = self.batch.open;
         egui::Window::new("Batch Convert")
-            .default_width(480.0)
+            .default_width(560.0)
             .open(&mut open)
             .show(ctx, |ui| {
                 batch_window_body(ui, &mut self.batch, &self.images)
@@ -313,47 +314,56 @@ fn file_list_section(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBu
 
     ui.label(format!("{} file(s)", batch.files.len()));
 
+    let width = ui.available_width();
     let mut remove: Option<usize> = None;
     TableBuilder::new(ui)
         .id_salt("batch_file_list")
         .striped(true)
+        .column(Column::exact(width * 0.28))
+        .column(Column::remainder().clip(true))
         .column(Column::exact(26.0))
-        .column(
-            Column::auto()
-                .resizable(true)
-                .clip(true)
-                .at_least(120.0),
-        )
-        .column(Column::remainder().clip(true).at_least(72.0))
+        .column(Column::exact(26.0))
         .max_scroll_height(140.0)
         .header(20.0, |mut header| {
+            header.col(|ui| {
+                ui.strong("Filename");
+            });
+            header.col(|ui| {
+                ui.strong("Path");
+            });
             header.col(|_ui| {});
-            header.col(|ui| {
-                ui.strong("File");
-            });
-            header.col(|ui| {
-                ui.strong("Status");
-            });
+            header.col(|_ui| {});
         })
         .body(|body| {
             body.rows(22.0, batch.files.len(), |mut row| {
                 let index = row.index();
                 let path = &batch.files[index];
                 row.col(|ui| {
-                    if ui.small_button(icons::X).clicked() {
-                        remove = Some(index);
-                    }
-                });
-                row.col(|ui| {
                     let name = path
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| path.display().to_string());
-                    ui.label(name).on_hover_text(path.display().to_string());
+                    ui.label(name);
+                });
+                row.col(|ui| {
+                    let parent = path
+                        .parent()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default();
+                    ui.label(parent).on_hover_text(path.display().to_string());
                 });
                 row.col(|ui| {
                     let status = batch.statuses.get(index).unwrap_or(&None);
-                    ui.label(status_label(status));
+                    let (icon, color) = status_icon(status);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(icon).color(color))
+                            .on_hover_text(status_label(status));
+                    });
+                });
+                row.col(|ui| {
+                    if ui.small_button(icons::X).clicked() {
+                        remove = Some(index);
+                    }
                 });
             });
         });
@@ -366,73 +376,92 @@ fn file_list_section(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBu
 }
 
 fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
-    ui.horizontal(|ui| {
-        ui.label("Format:");
-        egui::ComboBox::from_id_salt("batch_format")
-            .selected_text(batch.format.extension().to_uppercase())
-            .show_ui(ui, |ui| {
-                for format in [
-                    OutputFormat::Png,
-                    OutputFormat::Jpeg,
-                    OutputFormat::Gif,
-                    OutputFormat::Bmp,
-                    OutputFormat::Tiff,
-                    OutputFormat::Webp,
-                    OutputFormat::Tga,
-                ] {
-                    ui.selectable_value(
-                        &mut batch.format,
-                        format,
-                        format.extension().to_uppercase(),
+    egui::Grid::new("batch_output")
+        .num_columns(2)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            grid_label(ui, "Format:");
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("batch_format")
+                    .selected_text(batch.format.extension().to_uppercase())
+                    .show_ui(ui, |ui| {
+                        for format in [
+                            OutputFormat::Png,
+                            OutputFormat::Jpeg,
+                            OutputFormat::Gif,
+                            OutputFormat::Bmp,
+                            OutputFormat::Tiff,
+                            OutputFormat::Webp,
+                            OutputFormat::Tga,
+                        ] {
+                            ui.selectable_value(
+                                &mut batch.format,
+                                format,
+                                format.extension().to_uppercase(),
+                            );
+                        }
+                    });
+                if batch.format == OutputFormat::Jpeg {
+                    ui.label("Quality:");
+                    ui.add(
+                        egui::DragValue::new(&mut batch.save_options.jpeg_quality).range(1..=100),
                     );
                 }
             });
-        if batch.format == OutputFormat::Jpeg {
-            ui.label("Quality:");
-            ui.add(egui::DragValue::new(&mut batch.save_options.jpeg_quality).range(1..=100));
-        }
-    });
+            ui.end_row();
 
-    ui.horizontal(|ui| {
-        ui.label("If target exists:");
-        egui::ComboBox::from_id_salt("batch_overwrite")
-            .selected_text(match batch.overwrite {
-                OverwritePolicy::Overwrite => "Overwrite",
-                OverwritePolicy::Skip => "Skip",
-                // Headlessly there is nobody to ask, so `Ask` behaves as skip.
-                OverwritePolicy::Ask => "Ask (skips)",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut batch.overwrite,
-                    OverwritePolicy::Overwrite,
-                    "Overwrite",
-                );
-                ui.selectable_value(&mut batch.overwrite, OverwritePolicy::Skip, "Skip");
-                ui.selectable_value(&mut batch.overwrite, OverwritePolicy::Ask, "Ask (skips)");
+            grid_label(ui, "If target exists:");
+            egui::ComboBox::from_id_salt("batch_overwrite")
+                .selected_text(match batch.overwrite {
+                    OverwritePolicy::Overwrite => "Overwrite",
+                    OverwritePolicy::Skip => "Skip",
+                    // Headlessly there is nobody to ask, so `Ask` behaves as skip.
+                    OverwritePolicy::Ask => "Ask (skips)",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut batch.overwrite,
+                        OverwritePolicy::Overwrite,
+                        "Overwrite",
+                    );
+                    ui.selectable_value(&mut batch.overwrite, OverwritePolicy::Skip, "Skip");
+                    ui.selectable_value(&mut batch.overwrite, OverwritePolicy::Ask, "Ask (skips)");
+                });
+            ui.end_row();
+
+            grid_label(ui, "Output folder:");
+            ui.horizontal(|ui| {
+                if ui.button("Pick folder\u{2026}").clicked() {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        batch.output_dir = Some(dir);
+                    }
+                }
+                match &batch.output_dir {
+                    Some(dir) => {
+                        ui.label(dir.display().to_string());
+                    }
+                    None => {
+                        ui.label(
+                            "(none — converted files are written alongside their inputs)",
+                        );
+                    }
+                }
             });
-    });
+            ui.end_row();
+        });
+}
 
-    ui.horizontal(|ui| {
-        if ui.button("Output folder\u{2026}").clicked() {
-            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                batch.output_dir = Some(dir);
-            }
-        }
-        match &batch.output_dir {
-            Some(dir) => {
-                ui.label(dir.display().to_string());
-            }
-            None => {
-                ui.label("(none selected — converted files are written alongside their inputs)");
-            }
-        }
+/// A right-aligned form label with its colon (UI-DESIGN §4).
+fn grid_label(ui: &mut egui::Ui, text: &str) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.label(text);
     });
 }
 
 fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
     ui.label("Operations (applied in order):");
 
+    let width = ui.available_width();
     let mut remove_op: Option<usize> = None;
     if batch.operations.is_empty() {
         ui.label("(no operations)");
@@ -441,17 +470,11 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
             .id_salt("batch_operations")
             .striped(true)
             .column(Column::exact(26.0))
-            .column(Column::exact(26.0))
-            .column(
-                Column::auto()
-                    .resizable(true)
-                    .clip(true)
-                    .at_least(100.0),
-            )
+            .column(Column::exact(width * 0.30))
             .column(Column::remainder().clip(true))
+            .column(Column::exact(26.0))
             .max_scroll_height(120.0)
             .header(20.0, |mut header| {
-                header.col(|_ui| {});
                 header.col(|ui| {
                     ui.strong("#");
                 });
@@ -461,16 +484,12 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                 header.col(|ui| {
                     ui.strong("Switch");
                 });
+                header.col(|_ui| {});
             })
             .body(|body| {
                 body.rows(22.0, batch.operations.len(), |mut row| {
                     let index = row.index();
                     let op = &batch.operations[index];
-                    row.col(|ui| {
-                        if ui.small_button(icons::X).clicked() {
-                            remove_op = Some(index);
-                        }
-                    });
                     row.col(|ui| {
                         ui.label(format!("{}", index + 1));
                     });
@@ -480,6 +499,11 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                     row.col(|ui| {
                         ui.monospace(op.to_cli());
                     });
+                    row.col(|ui| {
+                        if ui.small_button(icons::X).clicked() {
+                            remove_op = Some(index);
+                        }
+                    });
                 });
             });
     }
@@ -487,45 +511,84 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
         batch.operations.remove(index);
     }
 
-    ui.horizontal(|ui| {
-        let choice = OperationChoice::ALL[batch.pending_op.min(OperationChoice::ALL.len() - 1)];
-        egui::ComboBox::from_id_salt("batch_op")
-            .selected_text(choice.label())
-            .show_ui(ui, |ui| {
-                for (index, option) in OperationChoice::ALL.iter().enumerate() {
-                    ui.selectable_value(&mut batch.pending_op, index, option.label());
+    // Fixed rows: the resize parameters stay visible but disabled unless the
+    // chosen step uses them, so the layout never jumps (UI-DESIGN §5).
+    let choice = OperationChoice::ALL[batch.pending_op.min(OperationChoice::ALL.len() - 1)];
+    let resizing = choice == OperationChoice::Resize;
+    egui::Grid::new("batch_add_step")
+        .num_columns(2)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            grid_label(ui, "Add step:");
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("batch_op")
+                    .selected_text(choice.label())
+                    .show_ui(ui, |ui| {
+                        for (index, option) in OperationChoice::ALL.iter().enumerate() {
+                            ui.selectable_value(&mut batch.pending_op, index, option.label());
+                        }
+                    });
+                if ui.add_enabled(
+                    choice
+                        .to_operation(batch.resize_width, batch.resize_height, batch.resize_filter)
+                        .is_some(),
+                    egui::Button::new("Add step"),
+                )
+                .clicked()
+                {
+                    if let Some(op) = choice
+                        .to_operation(batch.resize_width, batch.resize_height, batch.resize_filter)
+                    {
+                        batch.operations.push(op);
+                    }
                 }
             });
+            ui.end_row();
 
-        if choice == OperationChoice::Resize {
-            ui.label("W:");
-            ui.add(egui::DragValue::new(&mut batch.resize_width).range(0..=100_000));
-            ui.label("H:");
-            ui.add(egui::DragValue::new(&mut batch.resize_height).range(0..=100_000));
-            egui::ComboBox::from_id_salt("batch_filter")
-                .selected_text(filter_label(batch.resize_filter))
-                .show_ui(ui, |ui| {
-                    for filter in [
-                        ResampleFilter::Nearest,
-                        ResampleFilter::Triangle,
-                        ResampleFilter::CatmullRom,
-                        ResampleFilter::Gaussian,
-                        ResampleFilter::Lanczos3,
-                    ] {
-                        ui.selectable_value(&mut batch.resize_filter, filter, filter_label(filter));
-                    }
-                });
-        }
+            grid_label(ui, "Resize to:");
+            ui.horizontal(|ui| {
+                ui.add_enabled(
+                    resizing,
+                    egui::DragValue::new(&mut batch.resize_width).range(0..=100_000),
+                );
+                ui.label("\u{d7}");
+                ui.add_enabled(
+                    resizing,
+                    egui::DragValue::new(&mut batch.resize_height).range(0..=100_000),
+                );
+                egui::ComboBox::from_id_salt("batch_filter")
+                    .selected_text(filter_label(batch.resize_filter))
+                    .show_ui(ui, |ui| {
+                        for filter in [
+                            ResampleFilter::Nearest,
+                            ResampleFilter::Triangle,
+                            ResampleFilter::CatmullRom,
+                            ResampleFilter::Gaussian,
+                            ResampleFilter::Lanczos3,
+                        ] {
+                            ui.selectable_value(
+                                &mut batch.resize_filter,
+                                filter,
+                                filter_label(filter),
+                            );
+                        }
+                    });
+            });
+            ui.end_row();
+        });
+    ui.label(
+        egui::RichText::new("Resize W\u{d7}H 0 = keep the aspect ratio.").size(11.0),
+    );
+}
 
-        if ui.button("Add step").clicked() {
-            if let Some(op) =
-                choice.to_operation(batch.resize_width, batch.resize_height, batch.resize_filter)
-            {
-                batch.operations.push(op);
-            }
-        }
-    });
-    ui.label("Resize W/H 0 = keep aspect ratio.");
+/// The per-file outcome as a status-bar icon (text on hover).
+fn status_icon(status: &Option<FileStatus>) -> (&'static str, egui::Color32) {
+    match status {
+        None => (icons::CIRCLE_NOTCH, theme::SUBDUED),
+        Some(FileStatus::Success) => (icons::CHECK, theme::FG),
+        Some(FileStatus::Skipped(_)) => (icons::MINUS, theme::SUBDUED),
+        Some(FileStatus::Failed(_)) => (icons::X_CIRCLE, theme::RED),
+    }
 }
 
 /// The operation chain as recipe text (the form the CLI shares), with
