@@ -188,20 +188,6 @@ impl PhotonApp {
                 let center_dist = zoom_center - image_screen_rect.center();
                 self.pan -= center_dist * (new_zoom / old_zoom - 1.0);
                 self.zoom = new_zoom;
-
-                // Update selection in image-space when zooming
-                if let Some(sel) = self.selection {
-                    let new_sel = egui::Rect::from_min_size(
-                        egui::pos2(
-                            (sel.min.x - response.rect.min.x - center_offset.x - self.pan.x)
-                                / scale_x,
-                            (sel.min.y - response.rect.min.y - center_offset.y - self.pan.y)
-                                / scale_y,
-                        ),
-                        egui::vec2(sel.width() / scale_x, sel.height() / scale_y),
-                    );
-                    self.selection_image_rect = Some(new_sel);
-                }
             }
         }
 
@@ -214,31 +200,6 @@ impl PhotonApp {
                     // Pan with left or middle mouse drag
                     if response.dragged() {
                         self.pan += response.drag_delta();
-
-                        // Update screen-space selection to follow pan
-                        if let Some(image_sel) = self.selection_image_rect {
-                            let screen_min = egui::pos2(
-                                response.rect.min.x
-                                    + image_sel.min.x * scale_x
-                                    + center_offset.x
-                                    + self.pan.x,
-                                response.rect.min.y
-                                    + image_sel.min.y * scale_y
-                                    + center_offset.y
-                                    + self.pan.y,
-                            );
-                            let screen_max = egui::pos2(
-                                response.rect.min.x
-                                    + image_sel.max.x * scale_x
-                                    + center_offset.x
-                                    + self.pan.x,
-                                response.rect.min.y
-                                    + image_sel.max.y * scale_y
-                                    + center_offset.y
-                                    + self.pan.y,
-                            );
-                            self.selection = Some(egui::Rect::from_min_max(screen_min, screen_max));
-                        }
                     }
                 }
                 MouseMode::Select => {
@@ -253,10 +214,9 @@ impl PhotonApp {
                                 egui::pos2(start.x.min(mouse_pos.x), start.y.min(mouse_pos.y));
                             let max =
                                 egui::pos2(start.x.max(mouse_pos.x), start.y.max(mouse_pos.y));
-                            let screen_rect = egui::Rect::from_min_max(min, max);
-                            self.selection = Some(screen_rect);
 
-                            // Convert to image-space
+                            // The selection lives in image space, so it stays
+                            // pinned to the pixels across zoom/pan.
                             let image_min = egui::pos2(
                                 (min.x - response.rect.min.x - center_offset.x - self.pan.x)
                                     / scale_x,
@@ -274,7 +234,6 @@ impl PhotonApp {
                         }
                     } else if response.clicked() {
                         // Reset selection on click
-                        self.selection = None;
                         self.selection_image_rect = None;
                         self.selection_start = None;
                     } else if !response.dragged() {
@@ -286,46 +245,29 @@ impl PhotonApp {
                     // Middle mouse pan only
                     if response.dragged_by(egui::PointerButton::Middle) {
                         self.pan += response.drag_delta();
-
-                        // Update screen-space selection to follow pan
-                        if let Some(image_sel) = self.selection_image_rect {
-                            let screen_min = egui::pos2(
-                                response.rect.min.x
-                                    + image_sel.min.x * scale_x
-                                    + center_offset.x
-                                    + self.pan.x,
-                                response.rect.min.y
-                                    + image_sel.min.y * scale_y
-                                    + center_offset.y
-                                    + self.pan.y,
-                            );
-                            let screen_max = egui::pos2(
-                                response.rect.min.x
-                                    + image_sel.max.x * scale_x
-                                    + center_offset.x
-                                    + self.pan.x,
-                                response.rect.min.y
-                                    + image_sel.max.y * scale_y
-                                    + center_offset.y
-                                    + self.pan.y,
-                            );
-                            self.selection = Some(egui::Rect::from_min_max(screen_min, screen_max));
-                        }
                     }
                 }
             }
         }
 
-        // Draw selection box (screen-space)
-        if let Some(sel) = self.selection {
+        // Draw the selection box, mapped through the current transform so it
+        // stays pinned to the image pixels across zoom and pan.
+        if let Some(sel) = self.selection_image_rect {
+            let to_screen = |p: egui::Pos2| {
+                egui::pos2(
+                    response.rect.min.x + p.x * scale_x + center_offset.x + self.pan.x,
+                    response.rect.min.y + p.y * scale_y + center_offset.y + self.pan.y,
+                )
+            };
+            let screen = egui::Rect::from_min_max(to_screen(sel.min), to_screen(sel.max));
             painter.rect_stroke(
-                sel,
+                screen,
                 0.0,
                 egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(50, 150, 255)),
                 egui::StrokeKind::Outside,
             );
             painter.rect_filled(
-                sel,
+                screen,
                 0.0,
                 egui::Color32::from_rgba_unmultiplied(50, 150, 255, 50),
             );
@@ -448,7 +390,6 @@ impl PhotonApp {
         self.image_dimensions = Some((width, height));
         self.is_loading = false;
         self.error_overlay = None;
-        self.selection = None;
         self.selection_image_rect = None;
         self.selection_start = None;
 

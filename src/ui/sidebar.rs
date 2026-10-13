@@ -1,5 +1,6 @@
 use crate::app;
 use eframe::egui;
+use egui_phosphor::regular as icons;
 
 impl app::PhotonApp {
     pub(crate) fn ui_sidebar(&mut self, ui: &mut egui::Ui) {
@@ -50,29 +51,75 @@ impl app::PhotonApp {
         scroll_area.show_rows(ui, row_height, num_images, |ui, row_range| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for row in row_range {
-                let path = &self.images[row];
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-
-                let is_selected = row == self.current_index;
-                let text = if is_selected {
-                    // Dark text reads on the accent selection fill.
-                    egui::RichText::new(name)
-                        .strong()
-                        .color(app::theme::BG)
-                } else {
-                    egui::RichText::new(name)
-                };
-
-                let response = ui.add_sized(
-                    [ui.available_width(), row_height],
-                    egui::Button::new(text).selected(is_selected).truncate(),
-                );
-
-                if response.clicked() {
+                if sidebar_row(ui, &self.images[row], row == self.current_index, row_height) {
                     self.current_index = row;
                     self.request_current();
                 }
             }
         });
+    }
+}
+
+/// One sidebar entry: a full-width hit area with the filetype icon and file
+/// name right-aligned, so a truncated long name still shows its tail. Returns
+/// true when the entry was clicked.
+fn sidebar_row(
+    ui: &mut egui::Ui,
+    path: &std::path::Path,
+    is_selected: bool,
+    row_height: f32,
+) -> bool {
+    let response = ui
+        .allocate_response(egui::vec2(ui.available_width(), row_height), egui::Sense::click())
+        .on_hover_text(path.display().to_string());
+
+    let fill = if is_selected {
+        Some(app::theme::PURPLE)
+    } else if response.hovered() {
+        Some(app::theme::SURFACE_HOVER)
+    } else {
+        None
+    };
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(response.rect, 0.0, fill);
+    }
+
+    // Dark text reads on the accent selection fill.
+    let text_color = if is_selected {
+        app::theme::BG
+    } else {
+        app::theme::FG
+    };
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let text = format!("{}  {name}", file_type_icon(path));
+
+    let format = egui::TextFormat::simple(egui::TextStyle::Body.resolve(ui.style()), text_color);
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = (response.rect.width() - 16.0).max(0.0);
+    // One row, ellipsised: a long name loses its head, not its extension.
+    job.wrap.max_rows = 1;
+    job.wrap.overflow_character = Some('\u{2026}');
+    job.append(&text, 0.0, format);
+    let galley = ui.painter().layout_job(job);
+    let pos = egui::pos2(
+        response.rect.right() - 8.0 - galley.size().x,
+        response.rect.center().y - galley.size().y * 0.5,
+    );
+    ui.painter().galley(pos, galley, egui::Color32::TRANSPARENT);
+
+    response.clicked()
+}
+
+/// Phosphor's filetype glyphs where they exist, a generic file otherwise.
+fn file_type_icon(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => icons::FILE_PNG,
+        Some("jpg") | Some("jpeg") => icons::FILE_JPG,
+        _ => icons::FILE,
     }
 }

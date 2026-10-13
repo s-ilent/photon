@@ -5,6 +5,8 @@ use eframe::egui;
 // modules so accents stay one source of truth.
 pub(crate) const BG: egui::Color32 = egui::Color32::from_rgb(40, 42, 54);
 pub(crate) const CURRENT_LINE: egui::Color32 = egui::Color32::from_rgb(68, 71, 90);
+/// Dracula surface hover (the button-hover fill the theme applies).
+pub(crate) const SURFACE_HOVER: egui::Color32 = egui::Color32::from_rgb(98, 114, 164);
 pub(crate) const COMMENT: egui::Color32 = egui::Color32::from_rgb(98, 114, 164);
 pub(crate) const FG: egui::Color32 = egui::Color32::from_rgb(248, 248, 242);
 pub(crate) const PURPLE: egui::Color32 = egui::Color32::from_rgb(189, 147, 249);

@@ -242,7 +242,6 @@ pub struct PhotonApp {
     pub(crate) info_probe: Option<(PathBuf, Receiver<Result<image_info::ImageInfo, String>>)>,
     pub(crate) zoom: f32,
     pub(crate) pan: egui::Vec2,
-    pub(crate) selection: Option<egui::Rect>,
     pub(crate) selection_image_rect: Option<egui::Rect>,
     pub(crate) selection_start: Option<egui::Pos2>,
     pub(crate) mode: MouseMode,
@@ -344,7 +343,6 @@ impl PhotonApp {
             info_probe: None,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
-            selection: None,
             selection_image_rect: None,
             selection_start: None,
             mode: MouseMode::Browse,
@@ -389,7 +387,7 @@ impl PhotonApp {
     pub(crate) fn cycle_mode(&mut self) {
         self.mode = self.mode.next();
         // Clear selection when switching modes
-        self.selection = None;
+        self.selection_image_rect = None;
         self.selection_start = None;
     }
 

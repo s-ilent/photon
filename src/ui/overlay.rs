@@ -6,7 +6,9 @@ impl PhotonApp {
     pub(crate) fn ui_status_overlay(&self, ctx: &egui::Context, state: StatusOverlay) {
         egui::Area::new(egui::Id::new("status_overlay"))
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .order(egui::Order::Foreground)
+            // Background order: above the canvas, below tool windows — the
+            // overlay must never sit on top of an open window.
+            .order(egui::Order::Background)
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| match state {
                     StatusOverlay::NoImages => {

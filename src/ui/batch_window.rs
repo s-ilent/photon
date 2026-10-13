@@ -158,12 +158,13 @@ fn summarize(statuses: &[Option<FileStatus>]) -> (usize, usize, usize) {
     (success, skipped, failed)
 }
 
-/// Build one [`ConversionJob`] per source file, all sharing the run's target
-/// folder, format and operation chain. Encoder settings travel separately as
-/// [`SaveOptions`]. Pure — no I/O.
+/// Build one [`ConversionJob`] per source file, all sharing the run's format
+/// and operation chain. The output folder is the chosen `target_dir`, or each
+/// file's own directory when none was chosen. Encoder settings travel
+/// separately as [`SaveOptions`]. Pure — no I/O.
 fn build_jobs(
     files: &[PathBuf],
-    target_dir: &Path,
+    target_dir: Option<&Path>,
     format: OutputFormat,
     operations: &[ImageOp],
 ) -> Vec<ConversionJob> {
@@ -171,7 +172,9 @@ fn build_jobs(
         .iter()
         .map(|source| ConversionJob {
             source: source.clone(),
-            target_dir: target_dir.to_path_buf(),
+            target_dir: target_dir
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| source.parent().unwrap_or(Path::new(".")).to_path_buf()),
             format,
             operations: operations.to_vec(),
         })
@@ -209,13 +212,18 @@ fn spawn_batch(
     rx
 }
 
-/// Validate the current state and kick off a run. No-op when preconditions are
-/// unmet (no output folder); the Run button is disabled in that case anyway.
+/// Validate the current state and kick off a run. No-op when preconditions
+/// are unmet (no files); the Run button is disabled in that case anyway.
 fn start_batch(batch: &mut BatchState) {
-    let Some(dir) = batch.output_dir.clone() else {
+    if batch.files.is_empty() {
         return;
-    };
-    let jobs = build_jobs(&batch.files, &dir, batch.format, &batch.operations);
+    }
+    let jobs = build_jobs(
+        &batch.files,
+        batch.output_dir.as_deref(),
+        batch.format,
+        &batch.operations,
+    );
     batch.statuses = vec![None; jobs.len()];
     batch.progress = (0, jobs.len());
     batch.running = true;
@@ -396,7 +404,7 @@ fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                 ui.label(dir.display().to_string());
             }
             None => {
-                ui.label("(none selected)");
+                ui.label("(none selected — converted files are written alongside their inputs)");
             }
         }
     });
@@ -509,7 +517,7 @@ fn import_recipe(text: &str) -> Result<Vec<ImageOp>, String> {
 }
 
 fn run_section(ui: &mut egui::Ui, batch: &mut BatchState) {
-    let can_run = !batch.running && !batch.files.is_empty() && batch.output_dir.is_some();
+    let can_run = !batch.running && !batch.files.is_empty();
     ui.horizontal(|ui| {
         if ui.add_enabled(can_run, egui::Button::new("Run")).clicked() {
             start_batch(batch);
@@ -554,7 +562,7 @@ mod tests {
     fn build_jobs_maps_every_file_with_shared_settings() {
         let files = vec![PathBuf::from("/in/a.png"), PathBuf::from("/in/b.jpg")];
         let ops = vec![ImageOp::Grayscale, sample_op()];
-        let jobs = build_jobs(&files, Path::new("/out"), OutputFormat::Jpeg, &ops);
+        let jobs = build_jobs(&files, Some(Path::new("/out")), OutputFormat::Jpeg, &ops);
 
         assert_eq!(jobs.len(), 2);
         for (job, file) in jobs.iter().zip(&files) {
@@ -563,6 +571,15 @@ mod tests {
             assert_eq!(job.format, OutputFormat::Jpeg);
             assert_eq!(job.operations, ops);
         }
+    }
+
+    #[test]
+    fn build_jobs_without_a_target_folder_writes_alongside_each_input() {
+        let files = vec![PathBuf::from("/in/a.png"), PathBuf::from("/other/b.jpg")];
+        let jobs = build_jobs(&files, None, OutputFormat::Jpeg, &[]);
+
+        assert_eq!(jobs[0].target_dir, PathBuf::from("/in"));
+        assert_eq!(jobs[1].target_dir, PathBuf::from("/other"));
     }
 
     #[test]

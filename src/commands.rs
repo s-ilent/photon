@@ -185,7 +185,7 @@ impl Command {
             Command::Paste => "Paste",
             Command::OpenBatchConvert => "Convert…",
             Command::ImageInformation => "Image Information…",
-            Command::ToggleSettings => "Settings…",
+            Command::ToggleSettings => "Preferences…",
             Command::CycleMouseMode => "Cycle Mouse Mode",
             Command::NextImage => "Next Image",
             Command::PrevImage => "Previous Image",

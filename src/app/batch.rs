@@ -182,6 +182,12 @@ pub(crate) fn convert_file(
     file_name.push(job.format.extension());
     let target = job.target_dir.join(file_name);
 
+    // Never write over an input, however the overwrite policy is set: the
+    // alongside-input default collides when the format is unchanged.
+    if target == job.source {
+        return FileStatus::Skipped("output equals input".to_string());
+    }
+
     if target.exists() {
         match policy {
             OverwritePolicy::Overwrite => {}
@@ -287,6 +293,34 @@ mod tests {
         assert_eq!(OutputFormat::Tiff.extension(), "tiff");
         assert_eq!(OutputFormat::Webp.extension(), "webp");
         assert_eq!(OutputFormat::Tga.extension(), "tga");
+    }
+
+    #[test]
+    fn convert_never_writes_over_its_own_input() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("in.png");
+        RgbaImage::from_pixel(2, 2, Rgba([1, 2, 3, 255]))
+            .save(&source)
+            .expect("save source");
+
+        // Same folder, same format: the target IS the input.
+        let job = ConversionJob {
+            source: source.clone(),
+            target_dir: dir.path().to_path_buf(),
+            format: OutputFormat::Png,
+            operations: Vec::new(),
+        };
+
+        assert_eq!(
+            convert_file(&job, OverwritePolicy::Overwrite, &SaveOptions::default()),
+            FileStatus::Skipped("output equals input".to_string()),
+            "even Overwrite must not touch the input"
+        );
+        let before = std::fs::read(&source).expect("read source");
+        assert_eq!(
+            std::fs::metadata(&source).expect("source still there").len() as usize,
+            before.len()
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use eframe::egui;
 
 impl app::PhotonApp {
     pub(crate) fn ui_settings_window(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Settings")
+        egui::Window::new("Preferences")
             .open(&mut self.settings_open)
             .show(ctx, |ui| {
                 ui.checkbox(

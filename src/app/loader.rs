@@ -258,8 +258,10 @@ impl PhotonApp {
 
         // Drop the previous image's decoded bytes when the target changes;
         // refreshed when the new target's Active load completes. Its edit
-        // history goes with it.
-        if self.target_path.as_ref() != Some(&path) {
+        // history goes with it. The sidebar recentres on a target change too —
+        // a same-target reload (directory refresh) must not yank the list.
+        let target_changed = self.target_path.as_ref() != Some(&path);
+        if target_changed {
             self.active_rgba = None;
             self.clear_edit_history();
         }
@@ -297,7 +299,6 @@ impl PhotonApp {
                 // Locked magnification overrides the reset (Roadmap §3).
                 self.zoom = self.zoom_lock.apply(1.0);
                 self.pan = egui::Vec2::ZERO;
-                self.selection = None;
                 self.selection_image_rect = None;
                 self.selection_start = None;
 
@@ -318,7 +319,9 @@ impl PhotonApp {
             .as_ref()
             .and_then(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
 
-        self.scroll_to_target = true;
+        if target_changed {
+            self.scroll_to_target = true;
+        }
 
         // 2. Preload neighbors
         if self.images.len() > 1 {
@@ -384,7 +387,6 @@ impl PhotonApp {
                             if reset {
                                 self.zoom = 1.0;
                                 self.pan = egui::Vec2::ZERO;
-                                self.selection = None;
                                 self.selection_image_rect = None;
                                 self.selection_start = None;
 
@@ -636,14 +638,10 @@ impl PhotonApp {
                     // The file changed on disk: drop its stale cache entry
                     // (freeing textures) and load it again. request_current
                     // re-issues the Active load and refreshes active_rgba.
-                    // The file changed on disk: drop its stale cache entry and
-                    // load it again (request_current re-issues the Active
-                    // load; the dropped Arc frees the old GPU resources).
                     self.texture_cache.pop(&cur);
                     self.request_current();
                 }
                 self.current_mtime = mtime;
-                self.scroll_to_target = true;
             }
             _ => {
                 if self.images.is_empty() {
@@ -652,7 +650,6 @@ impl PhotonApp {
                     self.current_index = self.current_index.min(self.images.len() - 1);
                 }
                 self.request_current();
-                self.scroll_to_target = true;
             }
         }
     }
@@ -833,6 +830,38 @@ mod tests {
         assert_eq!(app.images[app.current_index], PathBuf::from("b.png"));
         // No reload was issued for the unchanged image.
         assert!(!app.is_loading);
+    }
+
+    #[test]
+    fn dir_refresh_does_not_recentre_the_sidebar() {
+        let mut app = cached_app(&[("a.png", 10, 10), ("b.png", 10, 10)]);
+        app.current_index = 1;
+        app.request_current();
+        app.scroll_to_target = false;
+
+        // New file appears: the place is preserved and the scroll position is
+        // not yanked back to the open image.
+        app.apply_dir_refresh(vec![
+            PathBuf::from("a.png"),
+            PathBuf::from("b.png"),
+            PathBuf::from("c.png"),
+        ]);
+        assert!(!app.scroll_to_target);
+
+        // The same holds when the displayed file changed on disk (same target,
+        // so the reload must not rescroll either).
+        app.current_mtime = Some(std::time::SystemTime::UNIX_EPOCH);
+        app.apply_dir_refresh(vec![
+            PathBuf::from("a.png"),
+            PathBuf::from("b.png"),
+            PathBuf::from("c.png"),
+        ]);
+        assert!(!app.scroll_to_target);
+
+        // Navigating to a different image still recentres.
+        app.current_index = 0;
+        app.request_current();
+        assert!(app.scroll_to_target);
     }
 
     #[test]
