@@ -18,14 +18,19 @@ use eframe::egui;
 pub(crate) enum Command {
     Open,
     SaveImageAs,
+    SaveSelectionAs,
     Copy,
     Paste,
     OpenBatchConvert,
     ImageInformation,
+    ToggleSettings,
     CycleMouseMode,
     NextImage,
     PrevImage,
     ToggleFullscreen,
+    ToggleSidebar,
+    FitImage,
+    ZoomActualSize,
     // Interactive edits (Roadmap.md §4).
     RotateLeft,
     RotateRight,
@@ -80,8 +85,10 @@ impl Command {
         match self {
             Command::Open
             | Command::SaveImageAs
+            | Command::SaveSelectionAs
             | Command::OpenBatchConvert
-            | Command::ImageInformation => MenuGroup::File,
+            | Command::ImageInformation
+            | Command::ToggleSettings => MenuGroup::File,
             Command::UndoEdit | Command::RedoEdit | Command::Copy | Command::Paste => {
                 MenuGroup::Edit
             }
@@ -96,7 +103,10 @@ impl Command {
             Command::CycleMouseMode
             | Command::NextImage
             | Command::PrevImage
-            | Command::ToggleFullscreen => MenuGroup::View,
+            | Command::ToggleFullscreen
+            | Command::ToggleSidebar
+            | Command::FitImage
+            | Command::ZoomActualSize => MenuGroup::View,
         }
     }
 
@@ -110,8 +120,19 @@ impl Command {
                 | Command::Copy
                 | Command::FlipHorizontal
                 | Command::Grayscale
+                | Command::FitImage
                 | Command::CycleMouseMode
         )
+    }
+
+    /// The tooltip shortcut hint, e.g. " (Ctrl+O)"; empty when unbound. The
+    /// first binding wins for multi-key commands.
+    pub(crate) fn shortcut_hint(&self, ctx: &egui::Context) -> String {
+        default_bindings()
+            .iter()
+            .find_map(|(c, s)| if c == self { *s } else { None })
+            .map(|s| format!(" ({})", ctx.format_shortcut(&s)))
+            .unwrap_or_default()
     }
 }
 
@@ -124,8 +145,10 @@ impl Command {
         &[
             Command::Open,
             Command::SaveImageAs,
+            Command::SaveSelectionAs,
             Command::OpenBatchConvert,
             Command::ImageInformation,
+            Command::ToggleSettings,
             Command::UndoEdit,
             Command::RedoEdit,
             Command::Copy,
@@ -140,7 +163,10 @@ impl Command {
             Command::Negative,
             Command::NextImage,
             Command::PrevImage,
+            Command::FitImage,
+            Command::ZoomActualSize,
             Command::CycleMouseMode,
+            Command::ToggleSidebar,
             Command::ToggleFullscreen,
         ]
     }
@@ -150,14 +176,19 @@ impl Command {
         match self {
             Command::Open => "Open…",
             Command::SaveImageAs => "Save As…",
+            Command::SaveSelectionAs => "Save Selection As…",
             Command::Copy => "Copy",
             Command::Paste => "Paste",
             Command::OpenBatchConvert => "Convert…",
             Command::ImageInformation => "Image Information…",
+            Command::ToggleSettings => "Settings…",
             Command::CycleMouseMode => "Cycle Mouse Mode",
             Command::NextImage => "Next Image",
             Command::PrevImage => "Previous Image",
             Command::ToggleFullscreen => "Toggle Fullscreen",
+            Command::ToggleSidebar => "Toggle Sidebar",
+            Command::FitImage => "Fit Image",
+            Command::ZoomActualSize => "Actual Size",
             Command::RotateLeft => "Rotate Left",
             Command::RotateRight => "Rotate Right",
             Command::Rotate180 => "Rotate 180°",
@@ -180,14 +211,19 @@ impl Command {
         match self {
             Command::Open => "open",
             Command::SaveImageAs => "save-as",
+            Command::SaveSelectionAs => "save-selection",
             Command::Copy => "copy",
             Command::Paste => "paste",
             Command::OpenBatchConvert => "convert",
             Command::ImageInformation => "info",
+            Command::ToggleSettings => "settings",
             Command::CycleMouseMode => "mouse-mode",
             Command::NextImage => "next",
             Command::PrevImage => "prev",
             Command::ToggleFullscreen => "fullscreen",
+            Command::ToggleSidebar => "sidebar",
+            Command::FitImage => "fit",
+            Command::ZoomActualSize => "actual-size",
             Command::RotateLeft => "rotate-left",
             Command::RotateRight => "rotate-right",
             Command::Rotate180 => "rotate-180",
@@ -214,7 +250,7 @@ impl Command {
 pub(crate) fn default_bindings() -> &'static [(Command, Option<egui::KeyboardShortcut>)] {
     use egui::{Key, KeyboardShortcut, Modifiers};
 
-    static BINDINGS: [(Command, Option<KeyboardShortcut>); 23] = [
+    static BINDINGS: [(Command, Option<KeyboardShortcut>); 28] = [
         (
             Command::Open,
             Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::O)),
@@ -271,13 +307,18 @@ pub(crate) fn default_bindings() -> &'static [(Command, Option<egui::KeyboardSho
                 Key::Z,
             )),
         ),
-        // Menu-only edits carry a `None` row so the "every command has a row"
-        // invariant holds without binding a key.
+        // Menu/toolbar-only commands carry a `None` row so the "every command
+        // has a row" invariant holds without binding a key.
         (Command::OpenBatchConvert, None),
         (
             Command::ImageInformation,
             Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::I)),
         ),
+        (Command::SaveSelectionAs, None),
+        (Command::ToggleSettings, None),
+        (Command::ToggleSidebar, None),
+        (Command::FitImage, None),
+        (Command::ZoomActualSize, None),
         (Command::RotateLeft, None),
         (Command::RotateRight, None),
         (Command::Rotate180, None),
@@ -319,6 +360,19 @@ impl PhotonApp {
             }
             Command::OpenBatchConvert => self.batch.open = true,
             Command::ImageInformation => self.info_open = !self.info_open,
+            Command::ToggleSettings => self.settings_open = !self.settings_open,
+            Command::ToggleSidebar => {
+                self.sidebar_open = !self.sidebar_open;
+                if self.sidebar_open {
+                    self.scroll_to_target = true;
+                }
+            }
+            Command::FitImage => self.needs_fit = true,
+            Command::ZoomActualSize => {
+                self.zoom = 1.0;
+                self.pan = egui::Vec2::ZERO;
+            }
+            Command::SaveSelectionAs => self.save_selection_as(),
             Command::RotateLeft => self.apply_edit(ImageOp::RotateLeft),
             Command::RotateRight => self.apply_edit(ImageOp::RotateRight),
             Command::Rotate180 => self.apply_edit(ImageOp::Rotate180),
@@ -345,6 +399,10 @@ impl PhotonApp {
             Command::UndoEdit => self.edit_undo.can_undo(),
             Command::RedoEdit => self.edit_undo.can_redo(),
             Command::CropToSelection => has_image && self.selection_image_rect.is_some(),
+            Command::SaveSelectionAs => {
+                self.mode == crate::app::MouseMode::Select && self.selection_image_rect.is_some()
+            }
+            Command::FitImage | Command::ZoomActualSize => has_image,
             Command::ImageInformation => self.target_path.is_some(),
             Command::SaveImageAs
             | Command::RotateLeft
@@ -440,6 +498,8 @@ mod tests {
             Command::Grayscale,
             Command::Negative,
             Command::SaveImageAs,
+            Command::FitImage,
+            Command::ZoomActualSize,
         ] {
             assert!(
                 !app.command_enabled(command),
@@ -450,6 +510,34 @@ mod tests {
         assert!(app.command_enabled(Command::Open));
         assert!(app.command_enabled(Command::Paste));
         assert!(app.command_enabled(Command::OpenBatchConvert));
+        assert!(app.command_enabled(Command::ToggleSettings));
+        assert!(app.command_enabled(Command::ToggleSidebar));
+    }
+
+    #[test]
+    fn save_selection_needs_a_selection() {
+        let app = PhotonApp::new();
+        assert!(!app.command_enabled(Command::SaveSelectionAs));
+    }
+
+    #[test]
+    fn toolbar_window_toggles_flip_their_state() {
+        let mut app = PhotonApp::new();
+        let ctx = egui::Context::default();
+        app.run_command(Command::ToggleSettings, &ctx);
+        assert!(app.settings_open);
+        let sidebar = app.sidebar_open;
+        app.run_command(Command::ToggleSidebar, &ctx);
+        assert_eq!(app.sidebar_open, !sidebar);
+    }
+
+    #[test]
+    fn shortcut_hints_follow_the_binding_table() {
+        let ctx = egui::Context::default();
+        assert!(Command::Open.shortcut_hint(&ctx).contains('O'));
+        assert!(!Command::SaveImageAs.shortcut_hint(&ctx).is_empty());
+        assert!(Command::OpenBatchConvert.shortcut_hint(&ctx).is_empty());
+        assert!(Command::ToggleSidebar.shortcut_hint(&ctx).is_empty());
     }
 
     /// Ctrl+I toggles the window: invoking it again closes what it opened.

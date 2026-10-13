@@ -70,7 +70,7 @@ are all just this registry driven from different sources. Build it first.
       authority (layout, menu placement rules, controls, dialogs,
       immediate-mode discipline). *(2026-10-14: `MenuGroup::Image`, Copy/Paste
       → Edit, `starts_menu_section`, `MenuGroup::ALL`/`title()`.)*
-- [ ] Route menu, shortcuts, CLI and batch through the registry. *(Menu, shortcuts and batch are routed; the CLI is not yet.)*
+- [ ] Route menu, shortcuts, CLI and batch through the registry. *(Menu, shortcuts, toolbar and batch are routed; the CLI is not yet.)*
 - [x] Per-command params as a serialisable struct with `to_cli()` / `from_cli()` —
       the one text form shared by config, batch recipes and the CLI. *(2026-10-13:
       `app/image_op.rs` — one `ImageOp` vocabulary replacing the duplicated

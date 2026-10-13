@@ -42,10 +42,10 @@ Placement rule for a new command — ask what it touches:
 
 | Group | Question | Today's contents |
 | --- | --- | --- |
-| File | Files, or opens a tool window? | Open…, Save As…, Convert…, Image Information… |
+| File | Files, or opens a tool window? | Open…, Save As…, Save Selection As…, Convert…, Image Information…, Settings… |
 | Edit | The edit history, or the clipboard? | Undo Edit, Redo Edit, Copy, Paste |
 | Image | The current image's pixels? | Rotate ×3, Flip ×2, Crop to Selection, Grayscale, Negative |
-| View | The viewport or app state? | Next/Previous, Cycle Mouse Mode, Toggle Fullscreen (+ zoom/window actions) |
+| View | The viewport or app state? | Next/Previous, Fit Image, Actual Size, Cycle Mouse Mode, Toggle Sidebar, Toggle Fullscreen (+ zoom/window actions) |
 
 - Sections hold 2–5 related items, separated by the section flag. No more
   separators than content.

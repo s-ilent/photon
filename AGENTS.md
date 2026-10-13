@@ -81,7 +81,7 @@ src/
 ├── image_loader.rs      # load_image()/load_image_opts() -> DecodedImage + ColorSpace: DDS via image_dds (kept BC-compressed when allowed; float/BC6H decoded to f32), EXR/HDR via into_rgba32f, everything else via the image crate with Exif orientation applied at decode; DecodedFormat (Rgba8/Bc/Float16), BcKind, DecodeOptions, DecodeError.
 ├── render.rs            # Image canvas render pass: WGSL pipeline, RGBA8 tile chunking / native BC upload, colour-space encode, DrawImageCallback (see "GPU / render pipeline") + the headless GPU test harness (`#[cfg(test)] mod gpu_tests`).
 ├── ui/
-│   ├── toolbar.rs       # Top menu bar (File/Edit/Image/View, registry-driven) + toolbar panel body (open/copy/paste/save, mouse mode, sidebar toggle, prev/next, fit/zoom).
+│   ├── toolbar.rs       # Top menu bar (File/Edit/Image/View, registry-driven) + toolbar panel body: a declarative button table dispatched through the same registry; tooltips carry binding-table shortcut hints.
 │   ├── info_bar.rs      # Bottom info bar (index, filename, dimensions, zoom, save status, layer/face selector).
 │   ├── sidebar.rs       # Left file-list sidebar (sort combo + virtualized rows).
 │   ├── settings_window.rs # Settings window body.
@@ -166,7 +166,7 @@ Defined in `src/main.rs` via `egui::KeyboardShortcut` and `Modifiers::COMMAND` (
 | Action | Shortcut |
 | --- | --- |
 | Open file/folder | `Cmd/Ctrl + O` (also the "Open" button) |
-| Save as… | `Cmd/Ctrl + S` (save-as dialog; "Save Selection As…" is button-only in Select mode) |
+| Save as… | `Cmd/Ctrl + S` (save-as dialog; "Save Selection As…" is a button and File-menu item, enabled with a selection in Select mode) |
 | Copy (or crop-copy if a selection exists) | `Cmd/Ctrl + C` |
 | Paste image | `Cmd/Ctrl + V` |
 | Next image | `Space` / `Right Arrow` |
@@ -176,7 +176,7 @@ Defined in `src/main.rs` via `egui::KeyboardShortcut` and `Modifiers::COMMAND` (
 | Image Information | `Cmd/Ctrl + I` (also the File menu) |
 | Undo / redo edit | `Cmd/Ctrl + Z` / `Cmd/Ctrl + Shift + Z` |
 
-The File/Edit/Image/View menu bar (in `ui/toolbar.rs`) is driven by the registry: every `Command` is listed under its `MenuGroup` with its `command_enabled()` state, so it is the discoverable home for the pixel-edit ops (rotate/flip/crop/grayscale/negative, under Image), Convert…, and the runtime-only View actions (Lock Zoom, Fit Window to Image, Centre Window, Zoom to Desktop) that are not registry commands. Which command belongs in which menu is decided by the placement rules in `UI-DESIGN.md` §2 — files/tool windows → File, history/clipboard → Edit, pixels → Image, viewport/app state → View.
+The File/Edit/Image/View menu bar and the toolbar panel (both in `ui/toolbar.rs`) are driven by the registry: every `Command` is listed under its `MenuGroup` with its `command_enabled()` state, so the menus are the discoverable home for the pixel-edit ops (under Image), the tool windows (Convert…, Image Information…, Settings…), Save Selection As…, and the runtime-only View actions (Lock Zoom, Fit Window to Image, Centre Window, Zoom to Desktop) that are not registry commands. The toolbar renders from a declarative button table (`TOOLS_LEFT`/`TOOLS_RIGHT`) through the same dispatch; a toolbar button *is* a command with an icon. Which command belongs in which menu is decided by the placement rules in `UI-DESIGN.md` §2 — files/tool windows → File, history/clipboard → Edit, pixels → Image, viewport/app state → View.
 
 GOTCHA: egui-winit (vendored — see `VENDOR_NOTES.md`) rewrites `Cmd/Ctrl+C`, `V`, and `X` into `egui::Event::Copy`/`Paste`/`Cut` at the input layer; when the text read succeeds, the key event never exists. Copy/paste are therefore dispatched from those command events, with the registry's raw-key fallback rows in `take_commands` (`src/input.rs`) covering backends that don't rewrite. The vendored patch is what makes that fallback work for images: with no text on the clipboard, Ctrl+V falls through as a plain key event (upstream swallows it unconditionally), so Photon can read the clipboard image itself. If a TextEdit is ever added, it will not see Ctrl+V for text — handle it there deliberately.
 
@@ -186,7 +186,7 @@ GOTCHA: egui-winit (vendored — see `VENDOR_NOTES.md`) rewrites `Cmd/Ctrl+C`, `
 
 The suite lives beside the code it tests (all pure-CPU except the GPU harness in `render.rs`):
 
-- `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, Copy/Paste carry their raw-key fallbacks, `command_enabled()` gating (undo/redo/crop/edit/Save disabled without history/selection/image), the Image Information command toggling the window, and the menu presentation invariants (groups contiguous in `Command::all()`, every group populated, no section separator opening a menu).
+- `commands.rs` — registry invariants: every `Command` has ≥1 binding row, the table names only known commands, `cli_name`s are unique and non-empty, no duplicate key binding, Copy/Paste carry their raw-key fallbacks, `command_enabled()` gating (undo/redo/crop/edit/Save/selection disabled without history/selection/image), the Image Information command toggling the window, the menu presentation invariants (groups contiguous in `Command::all()`, every group populated, no section separator opening a menu), toolbar window toggles, and shortcut hints rendered from the binding table.
 - `input.rs` — `take_commands` dispatch: clipboard command events (`Event::Copy`/`Paste`), Ctrl+C/V key fallbacks, navigation/mode/fullscreen shortcuts, two-key dedup, and no false positives — run against a bare `egui::Context` fed synthetic `RawInput`.
 - `image_loader.rs` — DDS roundtrip of an in-memory uncompressed RGBA8 DDS; a cubemap test asserting all six faces decode in file order (and `is_cubemap` is set); a DX10 3-layer array test; a no-Exif decode is byte-identical; an Exif `orientation=6` PNG fixture decodes with swapped dimensions and a rotation permutation (Roadmap §3); the native-BC path (compressed kept with `allow_bc` incl. byte length + colour space, RGBA8 without it, oversize fallback, legacy DXT1 → `Bc1`/`Srgb`, DXGI BC5 → `Bc5Unorm`/`Linear`); the float path (a `R32G32B32A32_Float` DDS round-trips exact `f16` values incl. >1.0, BC6H decodes to `Float16`, `allow_bc`/`max_dim` don't gate it); the colour-space/DXGI/f16 mapping helpers; plus `DecodeError::is_unsupported_format` classification (Roadmap §8).
 - `app/view.rs` — fit/zoom geometry (Roadmap §3): each `FitMode`, `FitWindow` (don't / enlarge-if-smaller / always) with monitor clamping, `centered_window_pos`, `zoom_to_desktop`, adaptive `zoom_limits`, zero-size guards, `clamp_to_limits`, `zoom_to_fill`, `ZoomLock`, plus the pixel-readout helpers (`image_pixel_at`, `html_hex`) and `tile_offsets`. Pure.

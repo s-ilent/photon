@@ -3,7 +3,133 @@ use crate::commands::{Command, MenuGroup};
 use eframe::egui;
 use egui_phosphor::regular as icons;
 
+/// One registry-backed toolbar button. `label` (optional) renders after the
+/// icon; the tooltip gets its shortcut hint from the binding table.
+struct ToolButton {
+    command: Command,
+    icon: &'static str,
+    label: &'static str,
+    tooltip: &'static str,
+}
+
+/// A toolbar slot: a button or a separator.
+enum ToolSlot {
+    Button(ToolButton),
+    Separator,
+}
+
+/// Right-hand buttons, in right-to-left display order.
+const TOOLS_RIGHT: [ToolButton; 2] = [
+    ToolButton {
+        command: Command::ToggleSettings,
+        icon: icons::GEAR,
+        label: "",
+        tooltip: "Settings",
+    },
+    ToolButton {
+        command: Command::ImageInformation,
+        icon: icons::INFO,
+        label: "",
+        tooltip: "Image Information",
+    },
+];
+
+/// Left-hand buttons, in display order.
+const TOOLS_LEFT: [ToolSlot; 15] = [
+    ToolSlot::Button(ToolButton {
+        command: Command::Open,
+        icon: icons::FOLDER_OPEN,
+        label: "Open",
+        tooltip: "Open",
+    }),
+    ToolSlot::Separator,
+    ToolSlot::Button(ToolButton {
+        command: Command::Copy,
+        icon: icons::COPY,
+        label: "Copy",
+        tooltip: "Copy",
+    }),
+    ToolSlot::Button(ToolButton {
+        command: Command::Paste,
+        icon: icons::CLIPBOARD,
+        label: "Paste",
+        tooltip: "Paste",
+    }),
+    ToolSlot::Button(ToolButton {
+        command: Command::SaveImageAs,
+        icon: icons::FLOPPY_DISK,
+        label: "Save",
+        tooltip: "Save As",
+    }),
+    ToolSlot::Button(ToolButton {
+        command: Command::OpenBatchConvert,
+        icon: icons::ARROWS_CLOCKWISE,
+        label: "Convert\u{2026}",
+        tooltip: "Batch convert files",
+    }),
+    ToolSlot::Button(ToolButton {
+        command: Command::SaveSelectionAs,
+        icon: icons::SCISSORS,
+        label: "Save Selection As\u{2026}",
+        tooltip: "Save the selected region as a file",
+    }),
+    ToolSlot::Separator,
+    ToolSlot::Button(ToolButton {
+        command: Command::ToggleSidebar,
+        icon: icons::SIDEBAR_SIMPLE,
+        label: "Sidebar",
+        tooltip: "Toggle the file list",
+    }),
+    ToolSlot::Separator,
+    ToolSlot::Button(ToolButton {
+        command: Command::PrevImage,
+        icon: icons::CARET_LEFT,
+        label: "Prev",
+        tooltip: "Previous image",
+    }),
+    ToolSlot::Button(ToolButton {
+        command: Command::NextImage,
+        icon: icons::CARET_RIGHT,
+        label: "Next",
+        tooltip: "Next image",
+    }),
+    ToolSlot::Separator,
+    ToolSlot::Button(ToolButton {
+        command: Command::FitImage,
+        icon: icons::ARROWS_OUT_SIMPLE,
+        label: "Fit",
+        tooltip: "Fit to window",
+    }),
+    ToolSlot::Button(ToolButton {
+        command: Command::ZoomActualSize,
+        icon: icons::FRAME_CORNERS,
+        label: "100%",
+        tooltip: "Actual size",
+    }),
+];
+
 impl app::PhotonApp {
+    /// One button: enable state from `command_enabled`, dispatch through
+    /// `run_command`, tooltip with the binding-table shortcut hint.
+    fn toolbar_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, button: &ToolButton) {
+        let label = if button.label.is_empty() {
+            button.icon.to_owned()
+        } else {
+            format!("{} {}", button.icon, button.label)
+        };
+        let tooltip = format!("{}{}", button.tooltip, button.command.shortcut_hint(ctx));
+        if ui
+            .add_enabled(
+                self.command_enabled(button.command),
+                egui::Button::new(label),
+            )
+            .on_hover_text(tooltip)
+            .clicked()
+        {
+            self.run_command(button.command, ctx);
+        }
+    }
+
     /// Top menu bar (File / Edit / Image / View), driven by the command
     /// registry: the groups come from [`MenuGroup::ALL`], the items and their
     /// enable state from [`Command::all`], so a new command joins a menu just
@@ -78,94 +204,32 @@ impl app::PhotonApp {
 
         // Far-right elements are laid out first (right-to-left)
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(icons::GEAR).on_hover_text("Settings").clicked() {
-                self.settings_open = !self.settings_open;
-            }
-            if ui
-                .button(icons::INFO)
-                .on_hover_text("Image Information (Ctrl+I)")
-                .clicked()
-            {
-                self.info_open = !self.info_open;
+            for button in &TOOLS_RIGHT {
+                self.toolbar_button(ui, ctx, button);
             }
             ui.separator();
+            // The mouse-mode button shows the live mode name, so it stays
+            // outside the static table.
             if ui
                 .button(format!("{} {}", icons::MOUSE_SIMPLE, self.mode.name()))
-                .on_hover_text("Mouse mode — click to cycle (Tab)")
+                .on_hover_text(format!(
+                    "Mouse mode{}",
+                    Command::CycleMouseMode.shortcut_hint(ctx)
+                ))
                 .clicked()
             {
-                self.cycle_mode();
+                self.run_command(Command::CycleMouseMode, ctx);
             }
 
             // Left-aligned elements fill the remaining space on the left (left-to-right)
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                if ui.button(format!("{} Open", icons::FOLDER_OPEN)).clicked() {
-                    self.open_file();
-                }
-                ui.separator();
-                if ui.button(format!("{} Copy", icons::COPY)).clicked() {
-                    self.copy_to_clipboard();
-                }
-                if ui.button(format!("{} Paste", icons::CLIPBOARD)).clicked() {
-                    self.paste_from_clipboard(ctx);
-                }
-                if ui.button(format!("{} Save", icons::FLOPPY_DISK)).clicked() {
-                    self.save_image_as();
-                }
-                if ui
-                    .button(format!("{} Convert\u{2026}", icons::ARROWS_CLOCKWISE))
-                    .on_hover_text("Batch convert files")
-                    .clicked()
-                {
-                    self.batch.open = true;
-                }
-                if ui
-                    .add_enabled(
-                        self.mode == app::MouseMode::Select && self.selection_image_rect.is_some(),
-                        egui::Button::new(format!("{} Save Selection As\u{2026}", icons::SCISSORS)),
-                    )
-                    .clicked()
-                {
-                    self.save_selection_as();
-                }
-                ui.separator();
-                let sidebar_btn = format!("{} Sidebar", icons::SIDEBAR_SIMPLE);
-                if ui
-                    .button(sidebar_btn)
-                    .on_hover_text("Toggle the file list")
-                    .clicked()
-                {
-                    self.sidebar_open = !self.sidebar_open;
-                    if self.sidebar_open {
-                        self.scroll_to_target = true;
+                for slot in &TOOLS_LEFT {
+                    match slot {
+                        ToolSlot::Separator => {
+                            ui.separator();
+                        }
+                        ToolSlot::Button(button) => self.toolbar_button(ui, ctx, button),
                     }
-                }
-                ui.separator();
-                if ui
-                    .button(format!("{} Prev", icons::CARET_LEFT))
-                    .on_hover_text("Previous image (Left arrow)")
-                    .clicked()
-                {
-                    self.prev_image();
-                }
-                if ui
-                    .button(format!("{} Next", icons::CARET_RIGHT))
-                    .on_hover_text("Next image (Right arrow)")
-                    .clicked()
-                {
-                    self.next_image();
-                }
-                ui.separator();
-                if ui
-                    .button(format!("{} Fit", icons::ARROWS_OUT_SIMPLE))
-                    .on_hover_text("Fit to window")
-                    .clicked()
-                {
-                    self.needs_fit = true;
-                }
-                if ui.button("100%").on_hover_text("Actual size").clicked() {
-                    self.zoom = 1.0;
-                    self.pan = egui::Vec2::ZERO;
                 }
             });
         });

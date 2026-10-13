@@ -204,12 +204,16 @@ HDR, normal-map preview, cubemap 3D view, compressed-VRAM DDS.
 
 ## Verify
 
-- [ ] **Menu reorg click-through** (2026-10-14) — menus are now File (Open…,
-      Save As… | Convert…, Image Information…), Edit (Undo/Redo | Copy/Paste),
-      Image (Rotate ×3 | Flip ×2, Crop | Grayscale, Negative), View (Next/Prev
-      | Cycle Mouse Mode, Fullscreen | Lock Zoom | window-fit actions) with
-      section separators; shortcuts and toolbar unchanged. Confirm every item
-      still dispatches and enables/disables as before.
+- [ ] **Menu + toolbar click-through** (2026-10-14) — menus are now File
+      (Open…, Save As…, Save Selection As… | Convert…, Image Information…,
+      Settings…), Edit (Undo/Redo | Copy/Paste), Image (Rotate ×3 | Flip ×2,
+      Crop | Grayscale, Negative), View (Next/Prev | Fit Image, Actual Size |
+      Cycle Mouse Mode, Toggle Sidebar, Fullscreen | Lock Zoom | window-fit
+      actions) with section separators. The toolbar is registry-driven too:
+      every button dispatches through `run_command` with `command_enabled`
+      gating — the toolbar **Save button is now disabled without an image**
+      (was always clickable). Shortcuts unchanged. Confirm dispatch and
+      enable states on both surfaces.
 - [ ] **Image copy/paste across apps on Wayland** — Sophia's notes claim
       arboard is "text-only on Wayland". Evidence update 2026-10-11: Photon's
       app-internal copy→paste works on this Wayland session (buttons), so the
@@ -257,6 +261,14 @@ the escalation path if a picked crate needs a fix upstream lacks.
       against our Dracula identity, and is frozen 4 release trains behind an
       internal API that moves at Rerun's train cadence. Its widget *shapes*
       are the catalog to crib into `ui/kit.rs`; the crate itself stays out).
+      Sophia layout-crate facts (surveyed 2026-10-14): `egui_taffy 0.12` is
+      the **last egui-0.34 line** (0.13→0.35, 0.14→0.36) and `egui_dock
+      0.19.1` is the maintained 0.34 docking line — but both needed vendored
+      forks at Sophia even on this line (dock: a `render_surface` mode for
+      multi-viewport floating windows; taffy: an upstream `request_discard`
+      that poisons presented frames), so adoption realistically means the
+      vendored copies. `egui-arbor` upstream pins egui 0.31 — adopt via
+      Sophia's verified 0.34.3 vendor copy, never from crates.io.
 - [x] **`egui-winit` vendored fork** (2026-10-14) — `vendor/egui-winit` behind
       `[patch.crates-io]`, one hunk: Ctrl+V with no text on the clipboard falls
       through as a key event so image paste reaches the app. The
@@ -274,6 +286,22 @@ the escalation path if a picked crate needs a fix upstream lacks.
 ---
 
 ## Done
+
+### 2026-10-14 (menu taxonomy + UI design guide + toolbar rewrite)
+- **Menu taxonomy** (Roadmap §1): `MenuGroup::Image` takes the eight pixel
+  edits, Copy/Paste move to Edit, section separators and the menu bar render
+  entirely from the registry (`MenuGroup::ALL`/`title()`,
+  `starts_menu_section`, presentation-ordered `Command::all`) with invariant
+  tests. `UI-DESIGN.md` is the new interface design authority.
+- **Toolbar registry rewrite**: every toolbar button is now a `Command`
+  dispatched through one table-driven loop — the five toolbar-only actions
+  (Settings, Sidebar, Fit, Actual Size, Save Selection As) became registry
+  commands with `None` binding rows, so they also appear in the File/View
+  menus. Enable states come from `command_enabled` (toolbar Save is now
+  disabled without an image — was always clickable), and tooltips render
+  their shortcut hint from the binding table (no more hardcoded "(Tab)"-style
+  text that would silently desync when rebinding lands). The mouse-mode
+  button stays hand-placed: its label is the live mode name.
 
 ### 2026-10-14 (Image Information follow-up: layout, toggle, Ctrl+V, HDR fixture)
 - **Info window layout bounded** — `Window::max_width(520)` plus truncated value
