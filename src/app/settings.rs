@@ -47,6 +47,24 @@ impl ZoomReset {
 }
 
 /// User-facing settings. Persisted to `config.ron` (see `app/config.rs`);
+/// Which edge something docks to / aligns against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    #[default]
+    Left,
+    Right,
+}
+
+impl Side {
+    pub fn label(self) -> &'static str {
+        match self {
+            Side::Left => "Left",
+            Side::Right => "Right",
+        }
+    }
+}
+
 /// `#[serde(default)]` fills missing fields from `Default` so partial or
 /// older config files stay loadable.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -74,6 +92,10 @@ pub struct AppSettings {
     /// (Roadmap §5b / shader M4). Ignored for non-HDR images.
     pub exposure: f32,
     pub sort_mode: SortMode,
+    /// Which edge the file-list sidebar docks to.
+    pub sidebar_side: Side,
+    /// Which side of the sidebar its text entries align against.
+    pub sidebar_align: Side,
     /// Per-command shortcut overrides as `(cli_name, shortcut text)` deltas
     /// from the defaults; `None` text = explicitly unbound (Roadmap §10).
     pub shortcut_overrides: Vec<(String, Option<String>)>,
@@ -94,6 +116,8 @@ impl Default for AppSettings {
             lock_zoom: false,
             exposure: 0.0,
             sort_mode: SortMode::default(),
+            sidebar_side: Side::Left,
+            sidebar_align: Side::Left,
             shortcut_overrides: Vec::new(),
         }
     }

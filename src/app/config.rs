@@ -114,6 +114,8 @@ mod tests {
             exposure: -1.5,
             fit_window: crate::app::view::FitWindow::AlwaysResize,
             sort_mode: SortMode::FileSizeSmallest,
+            sidebar_side: crate::app::Side::Right,
+            sidebar_align: crate::app::Side::Right,
             shortcut_overrides: vec![
                 ("next".into(), Some("Ctrl+N".into())),
                 ("fullscreen".into(), None),

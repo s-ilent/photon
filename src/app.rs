@@ -12,7 +12,7 @@ use wgpu::Device;
 use crate::commands::Command;
 use crate::render;
 
-pub(crate) use settings::{AppSettings, SortMode, ZoomReset};
+pub(crate) use settings::{AppSettings, Side, SortMode, ZoomReset};
 
 // Submodule Declarations
 mod canvas;
@@ -313,6 +313,8 @@ pub struct PhotonApp {
     /// Set when a new image is displayed; the canvas consumes it to resize the
     /// OS window to the image per `settings.fit_window` (Roadmap.md §3).
     pub(crate) pending_window_fit: bool,
+    /// The Preferences window's selected page (index into its page list).
+    pub(crate) preferences_page: usize,
     /// Effective shortcut table: defaults with `settings.shortcut_overrides`
     /// applied; rebuilt when the rebinding UI changes a binding (Roadmap §10).
     pub(crate) bindings: Vec<(Command, Option<egui::KeyboardShortcut>)>,
@@ -381,6 +383,7 @@ impl PhotonApp {
             edit_undo: edit::UndoStack::new(),
             zoom_lock: view::ZoomLock::new(),
             pending_window_fit: false,
+            preferences_page: 0,
             bindings: crate::commands::effective_bindings(&[]),
             binding_capture: None,
             cli_ops: None,

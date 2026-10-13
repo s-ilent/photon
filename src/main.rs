@@ -92,7 +92,11 @@ impl eframe::App for app::PhotonApp {
         egui::Panel::bottom("info").show_inside(ui, |ui| self.ui_info_bar(ui));
 
         if self.sidebar_open {
-            egui::Panel::left("sidebar")
+            let panel = match self.settings.sidebar_side {
+                app::Side::Right => egui::Panel::right("sidebar"),
+                app::Side::Left => egui::Panel::left("sidebar"),
+            };
+            panel
                 .resizable(true)
                 .min_size(200.0)
                 .show_inside(ui, |ui| self.ui_sidebar(ui));

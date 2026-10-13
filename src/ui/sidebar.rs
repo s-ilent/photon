@@ -50,8 +50,10 @@ impl app::PhotonApp {
 
         scroll_area.show_rows(ui, row_height, num_images, |ui, row_range| {
             ui.spacing_mut().item_spacing.y = 0.0;
+            let align = self.settings.sidebar_align;
             for row in row_range {
-                if sidebar_row(ui, &self.images[row], row == self.current_index, row_height) {
+                if sidebar_row(ui, &self.images[row], row == self.current_index, row_height, align)
+                {
                     self.current_index = row;
                     self.request_current();
                 }
@@ -60,14 +62,15 @@ impl app::PhotonApp {
     }
 }
 
-/// One sidebar entry: a full-width hit area with the filetype icon and file
-/// name right-aligned, so a truncated long name still shows its tail. Returns
-/// true when the entry was clicked.
+/// One sidebar entry: a full-width hit area with the filetype icon and a
+/// middle-elided file name, aligned to the configured side. Returns true when
+/// the entry was clicked.
 fn sidebar_row(
     ui: &mut egui::Ui,
     path: &std::path::Path,
     is_selected: bool,
     row_height: f32,
+    align: app::Side,
 ) -> bool {
     let response = ui
         .allocate_response(egui::vec2(ui.available_width(), row_height), egui::Sense::click())
@@ -90,24 +93,67 @@ fn sidebar_row(
     } else {
         app::theme::FG
     };
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let max_width = (response.rect.width() - 16.0).max(0.0);
+    let prefix = format!("{}  ", file_type_icon(path));
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let text = format!("{}  {name}", file_type_icon(path));
+    let text = middle_elide(&name, max_width, &prefix, |candidate| {
+        ui.painter()
+            .layout_no_wrap(candidate, font.clone(), text_color)
+            .size()
+            .x
+    });
 
-    let format = egui::TextFormat::simple(egui::TextStyle::Body.resolve(ui.style()), text_color);
-    let mut job = egui::text::LayoutJob::default();
-    job.wrap.max_width = (response.rect.width() - 16.0).max(0.0);
-    // One row, ellipsised: a long name loses its head, not its extension.
-    job.wrap.max_rows = 1;
-    job.wrap.overflow_character = Some('\u{2026}');
-    job.append(&text, 0.0, format);
-    let galley = ui.painter().layout_job(job);
-    let pos = egui::pos2(
-        response.rect.right() - 8.0 - galley.size().x,
-        response.rect.center().y - galley.size().y * 0.5,
-    );
+    let galley = ui.painter().layout_no_wrap(format!("{prefix}{text}"), font, text_color);
+    let x = match align {
+        app::Side::Right => response.rect.right() - 8.0 - galley.size().x,
+        app::Side::Left => response.rect.left() + 8.0,
+    };
+    let pos = egui::pos2(x, response.rect.center().y - galley.size().y * 0.5);
     ui.painter().galley(pos, galley, egui::Color32::TRANSPARENT);
 
     response.clicked()
+}
+
+/// macOS-style middle elision: keep the head and tail of `name` with an
+/// ellipsis between until the composed `prefix + name` line fits `max_width`
+/// (measured by `width_of`). Binary search over the kept-character count, so
+/// a pathological name costs a handful of layout calls.
+fn middle_elide(
+    name: &str,
+    max_width: f32,
+    prefix: &str,
+    mut width_of: impl FnMut(String) -> f32,
+) -> String {
+    if width_of(format!("{prefix}{name}")) <= max_width {
+        return name.to_owned();
+    }
+    let chars: Vec<char> = name.chars().collect();
+    let build = |keep: usize| -> String {
+        let head = keep / 2;
+        let tail = keep - head;
+        let mut out: String = chars[..head].iter().collect();
+        out.push('\u{2026}');
+        out.extend(chars[chars.len() - tail..].iter());
+        out
+    };
+
+    let mut lo = 0usize;
+    let mut hi = chars.len();
+    let mut best = String::from("\u{2026}");
+    while lo <= hi {
+        let keep = (lo + hi) / 2;
+        let candidate = build(keep);
+        if width_of(format!("{prefix}{candidate}")) <= max_width {
+            best = candidate;
+            lo = keep + 1;
+        } else if keep == 0 {
+            break;
+        } else {
+            hi = keep - 1;
+        }
+    }
+    best
 }
 
 /// Phosphor's filetype glyphs where they exist, a generic file otherwise.
@@ -121,5 +167,41 @@ fn file_type_icon(path: &std::path::Path) -> &'static str {
         Some("png") => icons::FILE_PNG,
         Some("jpg") | Some("jpeg") => icons::FILE_JPG,
         _ => icons::FILE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A monospace-ish measurer: every char is 10 wide, the prefix 20.
+    fn measurer() -> impl FnMut(String) -> f32 {
+        |text: String| text.chars().count() as f32 * 10.0 + 10.0 // + padding
+    }
+
+    #[test]
+    fn short_names_pass_through() {
+        let mut width_of = measurer();
+        // prefix + name is 8 chars: 80 + 10 padding = 90 wide, fits 100.
+        assert_eq!(middle_elide("a.png", 100.0, "\u{f115}  ", &mut width_of), "a.png");
+    }
+
+    #[test]
+    fn long_names_keep_head_and_tail_with_an_ellipsis() {
+        let mut width_of = measurer();
+        let name = "abcdefghij".repeat(4); // 40 chars: 400 wide + prefix/padding
+        let elided = middle_elide(&name, 120.0, "P  ", &mut width_of);
+        assert!(elided.contains('\u{2026}'));
+        assert!(elided.starts_with('a'), "keeps the head: {elided}");
+        assert!(elided.ends_with('j'), "keeps the tail: {elided}");
+        // The result actually fits: prefix (3) + elided + padding <= 12 chars.
+        assert!(format!("P  {elided}").chars().count() * 10 + 10 <= 120);
+    }
+
+    #[test]
+    fn a_hopeless_name_elides_to_the_ellipsis() {
+        let mut width_of = measurer();
+        let elided = middle_elide("abcdef", 15.0, "", &mut width_of);
+        assert_eq!(elided, "\u{2026}");
     }
 }

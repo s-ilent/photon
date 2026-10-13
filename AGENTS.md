@@ -84,7 +84,7 @@ src/
 │   ├── toolbar.rs       # Top menu bar (File/Edit/Image/View, registry-driven) + toolbar panel body: a declarative button table dispatched through the same registry; tooltips carry binding-table shortcut hints.
 │   ├── info_bar.rs      # Bottom info bar (index, filename, dimensions, zoom, save status, layer/face selector).
 │   ├── sidebar.rs       # Left file-list sidebar (sort combo + virtualized rows).
-│   ├── settings_window.rs # Settings window body.
+│   ├── settings_window.rs # Preferences window: master-detail categories (General / View / Shortcuts, Sophia's schema) with live-applied settings.
 │   ├── batch_window.rs  # Batch Convert window: file list, format/quality/folder, operation chain (incl. convolution filters), recipe text in/out, non-blocking run, determinate progress + per-file status.
 │   ├── info_window.rs   # Image Information window: File/Image/Metadata rows from the probe + the Exif tag table; background probe with automatic re-probe on target change.
 │   └── overlay.rs       # Centre-screen status overlay (spinner / error / unsupported) + loading text.
