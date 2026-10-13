@@ -69,7 +69,14 @@ Placement rule for a new command — ask what it touches:
 ## 4. Forms and dialogs
 
 - Forms use `egui::Grid`: two columns, labels right-aligned with colon, fields
-  left-aligned, one spacing vocabulary. No freehand `horizontal` rows.
+  left-aligned, one spacing vocabulary. No freehand `horizontal` rows. Flex
+  lines cannot align a label column across rows, so a form built on a layout
+  engine is a worse Grid — engines do not take forms over.
+- Layout mechanism by case, one idiom per window: native `Layout` first;
+  `egui_flex` is the sanctioned engine for flow layout (wrapping or
+  width-pressured rows) when native stops coping (Todo.md). The remaining
+  rules in this section are engine-independent — swapping the mechanism never
+  rewrites them.
 - Spacing comes from `Style`/`Spacing`, not per-call pixel values; independent
   blocks get one `add_space`, related rows get none.
 - Dialogs are `egui::Window`s. Confirmations: non-collapsible, non-resizable,
