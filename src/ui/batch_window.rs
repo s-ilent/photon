@@ -372,6 +372,12 @@ fn batch_window_body(ui: &mut egui::Ui, batch: &mut BatchState, images: &[PathBu
         .data_mut(|d| d.insert_temp(lower_id, stack.response.rect.height()));
 }
 
+/// The two form grids' label column: one width for both, so their field
+/// columns line up. 120 pt holds the longest label ("If target exists:",
+/// 101 pt at the default font) and keeps the forms close to the window's
+/// left edge instead of the wider Preferences column.
+const LABEL_WIDTH: f32 = 120.0;
+
 /// Height the file area keeps for itself even in a short window, so the table
 /// keeps a usable viewport while the control stack scrolls instead. Sized so
 /// the stack's ~275 pt of content still shows whole (recipe included) at the
@@ -497,7 +503,7 @@ fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
         .num_columns(2)
         .spacing([FORM_SPACING, 6.0])
         .show(ui, |ui| {
-            form_label(ui, "Format:");
+            form_label(ui, LABEL_WIDTH, "Format:");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("batch_format")
                     .selected_text(batch.format.extension().to_uppercase())
@@ -527,7 +533,7 @@ fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
             });
             ui.end_row();
 
-            form_label(ui, "If target exists:");
+            form_label(ui, LABEL_WIDTH, "If target exists:");
             egui::ComboBox::from_id_salt("batch_overwrite")
                 .selected_text(match batch.overwrite {
                     OverwritePolicy::Overwrite => "Overwrite",
@@ -546,7 +552,7 @@ fn output_section(ui: &mut egui::Ui, batch: &mut BatchState) {
                 });
             ui.end_row();
 
-            form_label(ui, "Output folder:");
+            form_label(ui, LABEL_WIDTH, "Output folder:");
             ui.horizontal(|ui| {
                 if ui.button("Pick folder\u{2026}").clicked() {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
@@ -629,7 +635,7 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
         .num_columns(2)
         .spacing([FORM_SPACING, 6.0])
         .show(ui, |ui| {
-            form_label(ui, "Add step:");
+            form_label(ui, LABEL_WIDTH, "Add step:");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("batch_op")
                     .selected_text(choice.label())
@@ -663,7 +669,7 @@ fn operations_section(ui: &mut egui::Ui, batch: &mut BatchState) {
             });
             ui.end_row();
 
-            form_label(ui, "Parameters:");
+            form_label(ui, LABEL_WIDTH, "Parameters:");
             ui.horizontal(|ui| {
                 ui.add_enabled(
                     resizing,

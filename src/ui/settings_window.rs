@@ -5,7 +5,7 @@
 use crate::app;
 use crate::app::settings::Side;
 use crate::commands::{self, Command};
-use crate::ui::{form_cell, form_label, FORM_LABEL_WIDTH, FORM_SPACING};
+use crate::ui::{form_cell, form_label, FORM_SPACING};
 use eframe::egui;
 
 const PAGES: [&str; 3] = ["General", "View", "Shortcuts"];
@@ -14,6 +14,11 @@ const PAGES: [&str; 3] = ["General", "View", "Shortcuts"];
 /// pane is wider, clamped to the pane at narrow sizes. One column for every
 /// page keeps the form (and the Shortcuts table) at the same x across pages.
 const CONTENT_WIDTH: f32 = 460.0;
+
+/// The label column: one width for every page, so the field column never
+/// moves when the page changes. 180 pt holds the longest label ("Resize window
+/// to image:", 171.6 pt at the default font).
+const LABEL_WIDTH: f32 = 180.0;
 
 impl app::PhotonApp {
     /// Render the Preferences surface while it is open: a native OS child
@@ -83,21 +88,33 @@ impl app::PhotonApp {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    let column = CONTENT_WIDTH.min(ui.available_width());
+                    let avail = ui.available_width();
+                    let column = CONTENT_WIDTH.min(avail);
                     // The field column takes what the label column and the
                     // spacing leave. A slider fills it: the bar plus the value
                     // box after it (fixed at interact_size.x) equal the field.
-                    let field = (column - FORM_LABEL_WIDTH - FORM_SPACING).max(0.0);
+                    let field = (column - LABEL_WIDTH - FORM_SPACING).max(0.0);
                     let value_box = ui.spacing().interact_size.x + ui.spacing().item_spacing.x;
                     ui.spacing_mut().slider_width =
                         (field - value_box).max(ui.spacing().interact_size.x);
+                    // The scroll content inherits the master-detail row's
+                    // horizontal layout; give the page a vertical one, and
+                    // centre the column in it. The column must be a widget-like
+                    // child (allocate_ui_with_layout): a `with_layout` scope
+                    // anchors at the cursor's left, so Center would not move it.
                     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.set_min_width(column);
-                        match self.preferences_page {
-                            0 => self.general_page(ui, &ctx, field),
-                            1 => self.view_page(ui, field),
-                            _ => self.shortcuts_page(ui, &ctx),
-                        }
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(column, 0.0),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.set_min_width(column);
+                                match self.preferences_page {
+                                    0 => self.general_page(ui, &ctx, field),
+                                    1 => self.view_page(ui, field),
+                                    _ => self.shortcuts_page(ui, &ctx),
+                                }
+                            },
+                        );
                     });
                 });
         });
@@ -109,7 +126,7 @@ impl app::PhotonApp {
             .num_columns(2)
             .spacing([FORM_SPACING, 6.0])
             .show(ui, |ui| {
-                form_label(ui, "Theme:");
+                form_label(ui, LABEL_WIDTH, "Theme:");
                 form_field(ui, field, |ui| {
                     if ui.button("Cycle Theme").clicked() {
                         self.settings.dark_mode = !self.settings.dark_mode;
@@ -122,7 +139,7 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Font size:");
+                form_label(ui, LABEL_WIDTH, "Font size:");
                 form_field(ui, field, |ui| {
                     let font_size =
                         ui.add(egui::Slider::new(&mut self.settings.font_size, 10.0..=60.0));
@@ -137,9 +154,10 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Sidebar:");
+                form_label(ui, LABEL_WIDTH, "Sidebar:");
                 form_field(ui, field, |ui| {
                     egui::ComboBox::from_id_salt("sidebar_side")
+                        .wrap_mode(egui::TextWrapMode::Truncate)
                         .selected_text(self.settings.sidebar_side.label())
                         .show_ui(ui, |ui| {
                             for side in [Side::Left, Side::Right] {
@@ -153,9 +171,10 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Text alignment:");
+                form_label(ui, LABEL_WIDTH, "Text alignment:");
                 form_field(ui, field, |ui| {
                     egui::ComboBox::from_id_salt("sidebar_align")
+                        .wrap_mode(egui::TextWrapMode::Truncate)
                         .selected_text(self.settings.sidebar_align.label())
                         .show_ui(ui, |ui| {
                             for side in [Side::Left, Side::Right] {
@@ -177,7 +196,7 @@ impl app::PhotonApp {
             .num_columns(2)
             .spacing([FORM_SPACING, 6.0])
             .show(ui, |ui| {
-                form_label(ui, "On open:");
+                form_label(ui, LABEL_WIDTH, "On open:");
                 form_field(ui, field, |ui| {
                     ui.checkbox(
                         &mut self.settings.scale_to_fit,
@@ -186,9 +205,10 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Fit mode:");
+                form_label(ui, LABEL_WIDTH, "Fit mode:");
                 form_field(ui, field, |ui| {
                     egui::ComboBox::from_id_salt("fit_mode")
+                        .wrap_mode(egui::TextWrapMode::Truncate)
                         .selected_text(self.settings.fit_mode.label())
                         .show_ui(ui, |ui| {
                             for mode in [
@@ -202,9 +222,10 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Resize window to image:");
+                form_label(ui, LABEL_WIDTH, "Resize window to image:");
                 form_field(ui, field, |ui| {
                     egui::ComboBox::from_id_salt("fit_window")
+                        .wrap_mode(egui::TextWrapMode::Truncate)
                         .selected_text(self.settings.fit_window.label())
                         .show_ui(ui, |ui| {
                             for mode in [
@@ -222,9 +243,10 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Reset zoom:");
+                form_label(ui, LABEL_WIDTH, "Reset zoom:");
                 form_field(ui, field, |ui| {
                     egui::ComboBox::from_id_salt("zoom_reset")
+                        .wrap_mode(egui::TextWrapMode::Truncate)
                         .selected_text(self.settings.zoom_reset.label())
                         .show_ui(ui, |ui| {
                             for mode in [
@@ -242,7 +264,7 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Zoom:");
+                form_label(ui, LABEL_WIDTH, "Zoom:");
                 // Lock zoom (Roadmap §3): when enabled, capture the current
                 // magnification and hold it across navigation, overriding the
                 // reset policy above.
@@ -262,7 +284,7 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Scaling:");
+                form_label(ui, LABEL_WIDTH, "Scaling:");
                 form_field(ui, field, |ui| {
                     ui.checkbox(
                         &mut self.settings.use_sharp_scaling,
@@ -271,7 +293,7 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Background:");
+                form_label(ui, LABEL_WIDTH, "Background:");
                 form_field(ui, field, |ui| {
                     ui.checkbox(
                         &mut self.settings.checkerboard_bg,
@@ -280,13 +302,13 @@ impl app::PhotonApp {
                 });
                 ui.end_row();
 
-                form_label(ui, "Repeat:");
+                form_label(ui, LABEL_WIDTH, "Repeat:");
                 form_field(ui, field, |ui| {
                     ui.checkbox(&mut self.settings.tile_repeat, "Tile-repeat (seamless) view");
                 });
                 ui.end_row();
 
-                form_label(ui, "HDR exposure (EV):");
+                form_label(ui, LABEL_WIDTH, "HDR exposure (EV):");
                 // HDR exposure (shader M4): applied to float sources before
                 // the tonemap; ignored for non-HDR images.
                 form_field(ui, field, |ui| {
@@ -302,11 +324,13 @@ impl app::PhotonApp {
     /// The per-command shortcut table with its capture flow.
     fn shortcuts_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // Wrap explicitly: the hint must never widen the scroll content and
-        // clip at the window edge.
+        // clip at the window edge. Left-aligned: it is a paragraph, so its
+        // wrapped lines flush left even though the column itself is centred.
         ui.add(
             egui::Label::new(
                 "Copy and Paste always answer Ctrl+C/V; rebinding adds or removes an extra key.",
             )
+            .halign(egui::Align::Min)
             .wrap(),
         );
 

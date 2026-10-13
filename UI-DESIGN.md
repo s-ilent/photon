@@ -72,14 +72,16 @@ Placement rule for a new command — ask what it touches:
 ## 4. Forms and dialogs
 
 - Forms use `egui::Grid`: two columns, labels right-aligned with colon, fields
-  left-aligned, one spacing vocabulary. The label column is one fixed width
-  (`ui::FORM_LABEL_WIDTH`, shared by the Preferences pages and the Batch
-  Convert grids), so the field column starts at the same x everywhere — a page
-  switch never moves the form. The Preferences detail pane centres each page
-  on one content column (≤ 460 px), form and shortcut table alike. No freehand
-  `horizontal` rows. Flex lines cannot align a label column across rows, so a
-  form built on a layout engine is a worse Grid — engines do not take forms
-  over.
+  left-aligned, one spacing vocabulary. Each surface fixes one label width
+  (`settings_window::LABEL_WIDTH`, `batch_window::LABEL_WIDTH`), so the field
+  column starts at the same x everywhere on it — a page switch never moves the
+  form and the two Batch Convert grids line up. The Preferences detail pane
+  centres each page on one content column (≤ 460 px), form and shortcut table
+  alike; the hint paragraph inside it stays left-aligned. A field too narrow
+  for its control truncates with an ellipsis (combo values); a caption that
+  must stay readable wraps (checkbox labels). No freehand `horizontal` rows.
+  Flex lines cannot align a label column across rows, so a form built on a
+  layout engine is a worse Grid — engines do not take forms over.
 - Layout mechanism by case, one idiom per window: native `Layout` first;
   `egui_flex` is the sanctioned engine for flow layout (wrapping or
   width-pressured rows) when native stops coping (Todo.md). The remaining

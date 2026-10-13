@@ -90,6 +90,14 @@ fn render_preferences() {
             crate::ui::settings_window::render_check_preferences_body(&mut app, ui);
         });
     }
+    // Wide: the form block centres on its content column instead of filling
+    // the pane.
+    let mut app = PhotonApp::new();
+    app.settings_open = true;
+    app.preferences_page = 1;
+    render("preferences_wide.png", [760.0, 430.0], |ui| {
+        crate::ui::settings_window::render_check_preferences_body(&mut app, ui);
+    });
 }
 
 /// The bottom info bar with a real-looking image row; the mouse mode sits at
