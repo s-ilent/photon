@@ -84,6 +84,17 @@ impl PhotonApp {
             .map(std::path::Path::to_path_buf)
     }
 
+    /// The silent twin of the save-as path: encode the currently displayed
+    /// image to an exact path (command-line `--save`, Roadmap §10), skipping
+    /// the dialog. Reports through the same status channel, so the bottom bar
+    /// surfaces success/failure like any other save.
+    pub(crate) fn save_to_path(&mut self, path: PathBuf) {
+        let Some((rgba, width, height)) = current_rgba(self) else {
+            return;
+        };
+        self.encode_in_background(path, rgba, width, height);
+    }
+
     fn save_dialog_and_encode(
         &mut self,
         rgba: Vec<u8>,
@@ -106,11 +117,14 @@ impl PhotonApp {
             return;
         };
 
-        // Encoding/IO runs in a background thread so it doesn't freeze the
-        // render loop. `image::save_buffer` infers the format from the file
-        // extension the user typed (or the OS appended from the chosen filter).
-        // The result is reported through `save_status_receiver` and surfaced
-        // in the bottom bar; failures also keep the existing println.
+        self.encode_in_background(path, rgba, width, height);
+    }
+
+    /// Encoding/IO runs in a background thread so it doesn't freeze the
+    /// render loop. `image::save_buffer` infers the format from the file
+    /// extension. The result is reported through `save_status_receiver` and
+    /// surfaced in the bottom bar; failures also keep the existing log.
+    fn encode_in_background(&mut self, path: PathBuf, rgba: Vec<u8>, width: u32, height: u32) {
         let (tx, rx) = channel();
         self.save_status_receiver = Some(rx);
 
@@ -164,7 +178,12 @@ impl PhotonApp {
 /// Encode RGBA8 bytes to a file at `path`. The format is chosen by the file
 /// extension. For JPEG (which has no alpha channel) the alpha is dropped and
 /// the buffer is re-packed as RGB8; every other supported format keeps alpha.
-fn encode_to_path(path: &PathBuf, rgba: &[u8], width: u32, height: u32) -> Result<(), String> {
+pub(crate) fn encode_to_path(
+    path: &PathBuf,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
