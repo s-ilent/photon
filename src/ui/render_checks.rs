@@ -73,16 +73,20 @@ fn render_batch_convert() {
 
 #[test]
 fn render_preferences() {
+    // The window's default inner size (the width the forms are designed for).
     for (name, page) in [("general", 0usize), ("view", 1), ("shortcuts", 2)] {
         let mut app = PhotonApp::new();
         app.settings_open = true;
         app.preferences_page = page;
-        render(&format!("preferences_{name}.png"), [560.0, 430.0], |ui| {
+        render(&format!("preferences_{name}.png"), [660.0, 430.0], |ui| {
             crate::ui::settings_window::render_check_preferences_body(&mut app, ui);
         });
     }
     // Cramped size, to catch clipping: General and the widest form (View).
-    for (name, page) in [("preferences_small.png", 0usize), ("preferences_small_view.png", 1)] {
+    for (name, page) in [
+        ("preferences_small.png", 0usize),
+        ("preferences_small_view.png", 1),
+    ] {
         let mut app = PhotonApp::new();
         app.settings_open = true;
         app.preferences_page = page;

@@ -13,7 +13,9 @@ const PAGES: [&str; 3] = ["General", "View", "Shortcuts"];
 /// The detail pane carries one content column of this width: centred when the
 /// pane is wider, clamped to the pane at narrow sizes. One column for every
 /// page keeps the form (and the Shortcuts table) at the same x across pages.
-const CONTENT_WIDTH: f32 = 460.0;
+/// 520 pt gives the field column 328 pt, enough for the longest checkbox
+/// caption ("Checkerboard behind transparent images", 288 pt, plus the box).
+const CONTENT_WIDTH: f32 = 520.0;
 
 /// The label column: one width for every page, so the field column never
 /// moves when the page changes. 180 pt holds the longest label ("Resize window
@@ -32,7 +34,9 @@ impl app::PhotonApp {
         }
         let mut builder = egui::ViewportBuilder::default()
             .with_title("Preferences")
-            .with_inner_size([560.0, 430.0])
+            // Wide enough that the detail pane exceeds the content column, so
+            // the forms show single-line and the column stays centred.
+            .with_inner_size([660.0, 430.0])
             .with_min_inner_size([480.0, 320.0])
             .with_active(true);
         if ctx.embed_viewports() {
@@ -216,7 +220,11 @@ impl app::PhotonApp {
                                 app::view::FitMode::ReduceOnly,
                                 app::view::FitMode::AlwaysFit,
                             ] {
-                                ui.selectable_value(&mut self.settings.fit_mode, mode, mode.label());
+                                ui.selectable_value(
+                                    &mut self.settings.fit_mode,
+                                    mode,
+                                    mode.label(),
+                                );
                             }
                         });
                 });
@@ -304,7 +312,10 @@ impl app::PhotonApp {
 
                 form_label(ui, LABEL_WIDTH, "Repeat:");
                 form_field(ui, field, |ui| {
-                    ui.checkbox(&mut self.settings.tile_repeat, "Tile-repeat (seamless) view");
+                    ui.checkbox(
+                        &mut self.settings.tile_repeat,
+                        "Tile-repeat (seamless) view",
+                    );
                 });
                 ui.end_row();
 

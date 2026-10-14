@@ -311,8 +311,9 @@ the escalation path if a picked crate needs a fix upstream lacks.
 - **Preferences forms**: every page renders on one centred content column
   (460 pt max, clamped when narrow); the label column is a fixed 180 pt and the
   field column is fixed, so General/View/Shortcuts share one geometry and the
-  form never moves on a page switch. Long checkbox captions wrap; combo values
-  truncate on one line at narrow widths. The centring needed a widget-like
+  form never moves on a page switch. The default window is 660x430 with a
+  520 pt column, so the longest checkbox captions stay single-line (user's
+  call, 2026-10-14); combo values truncate on one line at narrow widths. The centring needed a widget-like
   child (`allocate_ui_with_layout`) — a `with_layout` scope anchors left and
   never centred anything (found by rendering a wide pane).
 - **Menubar hover switching**: egui 0.34 opens a top-level menu as a
